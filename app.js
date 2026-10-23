@@ -23,15 +23,38 @@
     const el = $("auth-message"); el.textContent = message; el.className = `notice ${type}`;
   }
   function clearNotice() { $("auth-message").className = "notice hidden"; $("auth-message").textContent = ""; }
-  function setMode(next) {
-    mode = next;
-    $("signup-fields").classList.toggle("hidden", mode !== "signup");
-    $("login-fields").classList.toggle("hidden", mode !== "login");
-    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
-    $("auth-submit").innerHTML = mode === "signup" ? 'Submit account request <span>→</span>' : 'Log in <span>→</span>';
-    $("auth-heading").textContent = `${selectedType === "player" ? "Player" : "Member"} ${mode === "signup" ? "access request" : "login"}`;
-    clearNotice();
-  }
+  
+function setMode(next) {
+  mode = next;
+
+  $("signup-fields").classList.toggle("hidden", mode !== "signup");
+  $("login-fields").classList.toggle("hidden", mode !== "login");
+
+  $("signup-fields").querySelectorAll("input, select").forEach(el => {
+    const isPlayerField = $("player-fields").contains(el);
+    el.required = mode === "signup" &&
+      (!isPlayerField || selectedType === "player");
+  });
+
+  $("login-email").required = mode === "login";
+  $("login-password").required = mode === "login";
+
+  document.querySelectorAll(".tab").forEach(t =>
+    t.classList.toggle("active", t.dataset.mode === mode)
+  );
+
+  $("auth-submit").innerHTML = mode === "signup"
+    ? 'Submit account request <span>→</span>'
+    : 'Log in <span>→</span>';
+
+  $("auth-heading").textContent =
+    `${selectedType === "player" ? "Player" : "Member"} ${
+      mode === "signup" ? "access request" : "login"
+    }`;
+
+  clearNotice();
+}
+
   function configReady() {
     return window.OGC_CONFIG && window.OGC_CONFIG.SUPABASE_URL.startsWith("https://") &&
       !window.OGC_CONFIG.SUPABASE_URL.includes("PASTE_") &&

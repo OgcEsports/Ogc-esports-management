@@ -100,8 +100,16 @@ function setMode(next) {
     return `<div class="stat-card"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(value)}</div><div class="stat-foot">${escapeHtml(foot)}</div></div>`;
   }
   function moduleCards() {
-    return `<div class="module-grid">${MODULES.map(m => `<div class="module-card"><div class="module-icon">${m[0]}</div><h3>${m[1]}</h3><p>${m[2]}</p></div>`).join("")}</div>`;
-  }
+  return `<div class="module-grid">${MODULES.map((m, i) => `
+    <button type="button" class="module-card"
+      data-module="${i}"
+      style="text-align:left;width:100%;cursor:pointer;color:inherit">
+      <div class="module-icon">${m[0]}</div>
+      <h3>${m[1]}</h3>
+      <p>${m[2]}</p>
+    </button>
+  `).join("")}</div>`;
+}
   function empty(message) { return `<div class="empty-state">${escapeHtml(message)}</div>`; }
   async function renderDashboard() {
     showView("dashboard-view");

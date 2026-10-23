@@ -246,7 +246,11 @@
     }
     supabase = window.supabase.createClient(window.OGC_CONFIG.SUPABASE_URL,window.OGC_CONFIG.SUPABASE_ANON_KEY);
     try { await loadTeams(); await showWelcomeOrDashboard(); }
-    catch (e) { showView("welcome-view"); console.error(e); }
+    catch (e) {
+    showView("welcome-view");
+    console.error("OGC startup error:", e);
+    alert("Website startup error: " + e.message);
+    }    
     supabase.auth.onAuthStateChange((_event, session) => {
       if (session && !currentUser) { currentUser = session.user; setTimeout(() => loadProfile().catch(console.error),0); }
     });

@@ -110,14 +110,24 @@ function setMode(next) {
     </button>
   `).join("")}</div>`;
 }
-  document.addEventListener("click", function(event) {
+  document.addEventListener("click", async function(event) {
   const button = event.target.closest("[data-module]");
   if (!button) return;
 
   const module = MODULES[Number(button.dataset.module)];
-  if (module) {
-    alert(module[1] + " button is working!");
+  if (!module) return;
+
+  const title = module[1];
+  const team = currentProfile.account_type === "owner"
+    ? document.querySelector("#owner-team-detail h2")?.textContent
+    : teams.find(t => t.id === currentProfile.team_id)?.name;
+
+  if (!team) {
+    alert("Please open a team workspace first.");
+    return;
   }
+
+  alert(`${title}\nTeam: ${team}\n\nNext, we will connect this module to Supabase.`);
 });
   function empty(message) { return `<div class="empty-state">${escapeHtml(message)}</div>`; }
   async function renderDashboard() {
@@ -133,13 +143,6 @@ function setMode(next) {
     if (isOwner) await renderOwnerDashboard();
     else if (isMember) await renderMemberDashboard();
     else await renderPlayerDashboard();
-    document.querySelectorAll("[data-module]").forEach(button => {
-  button.addEventListener("click", () => {
-    const module = MODULES[Number(button.dataset.module)];
-    alert(module[1] + " module selected. Module functionality is not implemented yet.");
-  });
-});
-  }
   async function renderPlayerDashboard() {
     const p = currentProfile;
     const team = teams.find(t => t.id === p.team_id);

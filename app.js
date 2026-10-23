@@ -110,6 +110,15 @@ function setMode(next) {
     </button>
   `).join("")}</div>`;
 }
+  document.addEventListener("click", function(event) {
+  const button = event.target.closest("[data-module]");
+  if (!button) return;
+
+  const module = MODULES[Number(button.dataset.module)];
+  if (module) {
+    alert(module[1] + " button is working!");
+  }
+});
   function empty(message) { return `<div class="empty-state">${escapeHtml(message)}</div>`; }
   async function renderDashboard() {
     showView("dashboard-view");

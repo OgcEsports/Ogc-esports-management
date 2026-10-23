@@ -124,6 +124,12 @@ function setMode(next) {
     if (isOwner) await renderOwnerDashboard();
     else if (isMember) await renderMemberDashboard();
     else await renderPlayerDashboard();
+    document.querySelectorAll("[data-module]").forEach(button => {
+  button.addEventListener("click", () => {
+    const module = MODULES[Number(button.dataset.module)];
+    alert(module[1] + " module selected. Module functionality is not implemented yet.");
+  });
+});
   }
   async function renderPlayerDashboard() {
     const p = currentProfile;

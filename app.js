@@ -193,6 +193,259 @@
     `).join("")}</div>`;
   }
 
+  async function openAttendance(team) {
+    const isOwner = currentProfile && currentProfile.account_type === "owner";
+    const isMember = currentProfile && currentProfile.account_type === "member";
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+    }).format(new Date());
+    const oldPanel = $("attendance-panel");
+    if (oldPanel) oldPanel.remove();
+
+    const panel = document.createElement("section");
+    panel.id = "attendance-panel";
+    panel.className = "content-card";
+    panel.style.marginTop = "18px";
+    panel.innerHTML = `
+      <div class="section-head">
+        <h2>ATTENDANCE — ${escapeHtml(team.name)}</h2>
+        <button type="button" class="text-btn" id="attendance-close">Close</button>
+      </div>
+      <p class="tiny muted">Daily deadline: 9:00 PM IST. After the deadline, attendance is locked.</p>
+      ${(isOwner || isMember) ? `<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:12px 0">
+        <label style="display:grid;gap:6px">Date
+          <input type="date" id="attendance-date" value="${today}" max="${today}">
+        </label>
+        <button type="button" class="secondary-btn small" id="attendance-load">Load attendance</button>
+      </div>` : ""}
+      <p class="tiny muted" id="attendance-message">Loading attendance…</p>
+      <div id="attendance-list"></div>
+      ${(!isOwner && !isMember) ? `<button type="button" id="attendance-mark" style="margin-top:14px">Mark My Attendance — Present</button>` : ""}
+    `;
+    $("dashboard-content").appendChild(panel);
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("attendance-close").onclick = () => panel.remove();
+
+    async function loadAttendance() {
+      const date = (isOwner || isMember) ? ($("attendance-date").value || today) : today;
+      $("attendance-message").textContent = "Loading attendance…";
+      $("attendance-list").innerHTML = "";
+
+      let query = supabase.from("attendance_records")
+        .select("player_id,team_id,attendance_date,status,marked_at,notes")
+        .eq("team_id", team.id)
+        .eq("attendance_date", date);
+
+      if (!isOwner && !isMember) query = query.eq("player_id", currentUser.id);
+      const { data: records, error } = await query;
+      if (error) throw error;
+
+      if (isOwner || isMember) {
+        const { data: playerRows, error: playerError } = await supabase
+          .from("profiles")
+          .select("id,full_name,ign,player_role")
+          .eq("team_id", team.id)
+          .eq("account_type", "player")
+          .eq("status", "approved")
+          .order("full_name");
+        if (playerError) throw playerError;
+
+        const byPlayer = new Map((records || []).map(r => [r.player_id, r]));
+        $("attendance-list").innerHTML = !playerRows?.length
+          ? empty("No approved players are assigned to this team.")
+          : `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+            <thead><tr><th style="text-align:left;padding:9px">Player</th><th style="text-align:left;padding:9px">Status</th><th style="text-align:left;padding:9px">Marked at</th></tr></thead>
+            <tbody>${playerRows.map(p => {
+              const r = byPlayer.get(p.id);
+              return `<tr>
+                <td style="padding:9px;border-top:1px solid #333"><strong>${escapeHtml(p.ign || p.full_name)}</strong><div class="tiny muted">${escapeHtml(p.player_role || "")}</div></td>
+                <td style="padding:9px;border-top:1px solid #333">${escapeHtml(r ? r.status.toUpperCase() : "ABSENT (not submitted)")}</td>
+                <td style="padding:9px;border-top:1px solid #333">${r?.marked_at ? new Date(r.marked_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+              </tr>`;
+            }).join("")}</tbody></table></div>`;
+        $("attendance-message").textContent = `${playerRows?.length || 0} approved player(s) · ${date}`;
+      } else {
+        const record = (records || [])[0];
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+        }).format(new Date()).split(":").map(Number);
+        const isLocked = date < today || (date === today && (parts[0] > 21 || (parts[0] === 21 && parts[1] >= 0)));
+        $("attendance-list").innerHTML = `<div class="content-card">
+          <h3>Your status: ${escapeHtml(record ? record.status.toUpperCase() : (isLocked ? "ABSENT" : "NOT MARKED"))}</h3>
+          <p class="tiny muted">${record?.marked_at ? "Marked at " + new Date(record.marked_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : (isLocked ? "The attendance deadline has passed." : "Mark yourself present before 9:00 PM IST.")}</p>
+        </div>`;
+        const markButton = $("attendance-mark");
+        if (markButton) markButton.disabled = !!record || isLocked || date !== today;
+        $("attendance-message").textContent = date === today ? "Today's attendance" : `Attendance for ${date}`;
+      }
+    }
+
+    $("attendance-load")?.addEventListener("click", () => loadAttendance().catch(e => alert(e.message)));
+
+    $("attendance-mark")?.addEventListener("click", async () => {
+      const button = $("attendance-mark");
+      button.disabled = true;
+      button.textContent = "Submitting…";
+      try {
+        const { error } = await supabase.rpc("mark_my_attendance");
+        if (error) throw error;
+        alert("Attendance marked as Present.");
+        await loadAttendance();
+      } catch (e) {
+        alert(e.message || "Could not mark attendance.");
+        button.disabled = false;
+        button.textContent = "Mark My Attendance — Present";
+      }
+    });
+
+    try {
+      await loadAttendance();
+    } catch (e) {
+      $("attendance-message").textContent = "Could not load attendance: " + e.message;
+    }
+  }
+        let query = supabase.from("attendance_records")
+        .select("player_id,team_id,attendance_date,status,marked_at,notes")
+        .eq("team_id", team.id)
+        .eq("attendance_date", date);
+
+      if (!isOwner && !isMember) {
+        query = query.eq("player_id", currentUser.id);
+      }
+
+      const { data: records, error } = await query;
+      if (error) throw error;
+
+      if (isOwner || isMember) {
+        const { data: playerRows, error: playerError } = await supabase
+          .from("profiles")
+          .select("id,full_name,ign,player_role")
+          .eq("team_id", team.id)
+          .eq("account_type", "player")
+          .eq("status", "approved")
+          .order("full_name");
+
+        if (playerError) throw playerError;
+
+        const byPlayer = new Map(
+          (records || []).map(r => [r.player_id, r])
+        );
+
+        $("attendance-list").innerHTML = !playerRows?.length
+          ? empty("No approved players are assigned to this team.")
+          : `<div style="overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;padding:9px">Player</th>
+                    <th style="text-align:left;padding:9px">Status</th>
+                    <th style="text-align:left;padding:9px">Marked at</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${playerRows.map(p => {
+                    const r = byPlayer.get(p.id);
+                    return `<tr>
+                      <td style="padding:9px;border-top:1px solid #333">
+                        <strong>${escapeHtml(p.ign || p.full_name)}</strong>
+                        <div class="tiny muted">${escapeHtml(p.player_role || "")}</div>
+                      </td>
+                      <td style="padding:9px;border-top:1px solid #333">
+                        ${escapeHtml(r ? r.status.toUpperCase() : "ABSENT (not submitted)")}
+                      </td>
+                      <td style="padding:9px;border-top:1px solid #333">
+                        ${r?.marked_at
+                          ? new Date(r.marked_at).toLocaleTimeString("en-IN", {
+                              timeZone: "Asia/Kolkata",
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            })
+                          : "—"}
+                      </td>
+                    </tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>`;
+
+        $("attendance-message").textContent =
+          `${playerRows?.length || 0} approved player(s) · ${date}`;
+      } else {
+        const record = (records || [])[0];
+
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23"
+        }).format(new Date()).split(":").map(Number);
+
+        const isLocked = date < today ||
+          (date === today &&
+            (parts[0] > 21 || (parts[0] === 21 && parts[1] >= 0)));
+
+        $("attendance-list").innerHTML = `
+          <div class="content-card">
+            <h3>Your status: ${
+              escapeHtml(record
+                ? record.status.toUpperCase()
+                : (isLocked ? "ABSENT" : "NOT MARKED"))
+            }</h3>
+            <p class="tiny muted">
+              ${record?.marked_at
+                ? "Marked at " + new Date(record.marked_at)
+                    .toLocaleTimeString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    })
+                : (isLocked
+                    ? "The attendance deadline has passed."
+                    : "Mark yourself present before 9:00 PM IST.")}
+            </p>
+          </div>`;
+
+        const markButton = $("attendance-mark");
+
+        if (markButton) {
+          markButton.disabled = !!record || isLocked || date !== today;
+        }
+
+        $("attendance-message").textContent =
+          date === today ? "Today's attendance" : `Attendance for ${date}`;
+      }
+    }
+
+    $("attendance-load")?.addEventListener("click", () =>
+      loadAttendance().catch(e => alert(e.message))
+    );
+
+    $("attendance-mark")?.addEventListener("click", async () => {
+      const button = $("attendance-mark");
+      button.disabled = true;
+      button.textContent = "Submitting…";
+
+      try {
+        const { error } = await supabase.rpc("mark_my_attendance");
+        if (error) throw error;
+
+        alert("Attendance marked as Present.");
+        await loadAttendance();
+      } catch (e) {
+        alert(e.message || "Could not mark attendance.");
+        button.disabled = false;
+        button.textContent = "Mark My Attendance — Present";
+      }
+    });
+
+    try {
+      await loadAttendance();
+    } catch (e) {
+      $("attendance-message").textContent =
+        "Could not load attendance: " + e.message;
+    }
+  }
+
   document.addEventListener("click", async function(event) {
     const button = event.target.closest("[data-module]");
     if (!button) return;
@@ -202,28 +455,31 @@
 
     const teamId = button.dataset.teamId;
     const team = teams.find(t => t.id === teamId);
-    const title = module[1];
 
     if (!team) {
-      alert("Team not found. Please reopen the team workspace.");
+      alert("Please open a team workspace first.");
+      return;
+    }
+
+    if (module[1] === "ATTENDANCE") {
+      await openAttendance(team);
       return;
     }
 
     alert(
-      title + "\nTeam: " + team.name +
-      "\n\nThis module's records and editing form still need to be connected."
+      `${module[1]}\nTeam: ${team.name}\n\n` +
+      "This module will be connected to Supabase next."
     );
   });
 
   function empty(message) {
     return `<div class="empty-state">${escapeHtml(message)}</div>`;
   }
-
   async function renderDashboard() {
     showView("dashboard-view");
 
     $("topbar-right").innerHTML =
-      `<button class="secondary-btn small" id="top-signout">Sign out</button>`;
+      '<button class="secondary-btn small" id="top-signout">Sign out</button>';
 
     $("top-signout").addEventListener("click", signOut);
     $("signout-btn").onclick = signOut;
@@ -232,16 +488,19 @@
     const isOwner = p.account_type === "owner";
     const isMember = p.account_type === "member";
 
-    $("dashboard-title").textContent =
-      isOwner ? "Owner Control Center" :
-      isMember ? "Member Dashboard" :
-      (teams.find(t => t.id === p.team_id)?.name || "Team Dashboard");
+    $("dashboard-title").textContent = isOwner
+      ? "Owner Control Center"
+      : isMember
+        ? "Member Dashboard"
+        : (teams.find(t => t.id === p.team_id)?.name || "Team Dashboard");
 
     $("dashboard-subtitle").textContent =
       `Welcome, ${p.full_name}. ${
-        isOwner ? "You have owner permissions." :
-        isMember ? "Organization overview access." :
-        "Your team workspace."
+        isOwner
+          ? "You have owner permissions."
+          : isMember
+            ? "Organization overview access."
+            : "Your team workspace."
       }`;
 
     if (isOwner) await renderOwnerDashboard();
@@ -266,16 +525,16 @@
         <p>Visible only to approved members of your team</p>
       </div>
 
-      ${team ? `
-        <div class="team-detail-top">
-          <div>
-            <h2>${escapeHtml(team.name)}</h2>
-            <p class="muted">Team modules and information</p>
-          </div>
-          <span class="tag">PRIVATE TEAM</span>
-        </div>
-        ${moduleCards(team.id)}
-      ` : empty("Your team has not been assigned yet. Please contact the website owner.")}
+      ${team
+        ? `<div class="team-detail-top">
+             <div>
+               <h2>${escapeHtml(team.name)}</h2>
+               <p class="muted">Team modules and information</p>
+             </div>
+             <span class="tag">PRIVATE TEAM</span>
+           </div>
+           ${moduleCards(team.id)}`
+        : empty("Your team has not been assigned yet. Please contact the website owner.")}
 
       <div class="section-head"><h2>TEAM STATS</h2></div>
 
@@ -286,6 +545,7 @@
             Team performance charts will appear here once the owner adds daily performance records.
           </div>
         </div>
+
         <div class="content-card">
           <h3>Attendance</h3>
           <div class="chart-placeholder">
@@ -356,6 +616,7 @@
             Performance graph will populate after the owner records daily team metrics.
           </div>
         </div>
+
         <div class="content-card">
           <h3>Attendance analysis</h3>
           <div class="chart-placeholder">
@@ -369,6 +630,7 @@
           <h3>Weekly team activity</h3>
           ${empty("Weekly activity will appear after activity records are entered.")}
         </div>
+
         <div class="content-card">
           <h3>Pending reviews</h3>
           ${empty("No review data has been added yet.")}
@@ -401,7 +663,6 @@
       })
     );
   }
-
   async function renderOwnerDashboard() {
     const { data: profiles, error } = await supabase
       .from("profiles")

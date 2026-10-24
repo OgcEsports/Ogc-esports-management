@@ -99,7 +99,7 @@ function setMode(next) {
   function stat(label, value, foot = "") {
     return `<div class="stat-card"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(value)}</div><div class="stat-foot">${escapeHtml(foot)}</div></div>`;
   }
-  function moduleCards() {
+  function moduleCards(teamId) {
   return `<div class="module-grid">${MODULES.map((m, i) => `
     <button type="button" class="module-card"
       data-module="${i}"
@@ -109,25 +109,23 @@ function setMode(next) {
       <p>${m[2]}</p>
     </button>
   `).join("")}</div>`;
-}
-  document.addEventListener("click", async function(event) {
+}  
+document.addEventListener("click", async function(event) {
   const button = event.target.closest("[data-module]");
   if (!button) return;
-
   const module = MODULES[Number(button.dataset.module)];
   if (!module) return;
-
+  const teamId = button.dataset.teamId;
+  const team = teams.find(t => t.id === teamId);
   const title = module[1];
-  const team = currentProfile.account_type === "owner"
-    ? document.querySelector("#owner-team-detail h2")?.textContent
-    : teams.find(t => t.id === currentProfile.team_id)?.name;
-
   if (!team) {
-    alert("Please open a team workspace first.");
+    alert("Team not found. Please reopen the team workspace.");
     return;
   }
-
-  alert(`${title}\nTeam: ${team}\n\nNext, we will connect this module to Supabase.`);
+  alert(
+    title + "\nTeam: " + team.name +
+    "\n\nThis module's records and editing form still need to be connected."
+  );
 });
   function empty(message) { return `<div class="empty-state">${escapeHtml(message)}</div>`; }
   async function renderDashboard() {
@@ -149,7 +147,7 @@ function setMode(next) {
     $("dashboard-content").innerHTML = `
       <div class="stats-grid">${stat("ACCOUNT STATUS","APPROVED","Owner-approved account")}${stat("PLAYER ROLE",p.player_role || "—","Assigned role")}${stat("TEAM",team?.name || "—","Your assigned team")}${stat("FF UID",p.ff_uid || "—","Player profile")}</div>
       <div class="section-head"><h2>YOUR TEAM WORKSPACE</h2><p>Visible only to approved members of your team</p></div>
-      ${team ? `<div class="team-detail-top"><div><h2>${escapeHtml(team.name)}</h2><p class="muted">Team modules and information</p></div><span class="tag">PRIVATE TEAM</span></div>${moduleCards()}` : empty("Your team has not been assigned yet. Please contact the website owner.")}
+      ${team ? `<div class="team-detail-top"><div><h2>${escapeHtml(team.name)}</h2><p class="muted">Team modules and information</p></div><span class="tag">PRIVATE TEAM</span></div>${moduleCards(team.id)}` : empty("Your team has not been assigned yet. Please contact the website owner.")}
       <div class="section-head"><h2>TEAM STATS</h2></div>
       <div class="two-col"><div class="content-card"><h3>Performance overview</h3><div class="chart-placeholder">Team performance charts will appear here once the owner adds daily performance records.</div></div><div class="content-card"><h3>Attendance</h3><div class="chart-placeholder">Your attendance graph will appear here when attendance records are added.</div></div></div>`;
   }
@@ -173,7 +171,7 @@ function setMode(next) {
       <div class="section-head"><h2>TOP ACTIVE PLAYERS</h2></div><div class="content-card">${empty("Activity rankings will appear when the owner records player activity.")}</div>`;
     document.querySelectorAll("[data-team-open]").forEach(btn => btn.addEventListener("click", () => {
       const t = teamRows.find(x => x.id === btn.dataset.teamOpen);
-      $("member-team-detail").innerHTML = `<div class="section-head"><h2>${escapeHtml(t.name)} WORKSPACE</h2><button class="text-btn" id="close-team-detail">Close</button></div>${moduleCards()}`;
+      $("member-team-detail").innerHTML = `<div class="section-head"><h2>${escapeHtml(t.name)} WORKSPACE</h2><button class="text-btn" id="close-team-detail">Close</button></div>${moduleCards(t.id)}`;
       $("close-team-detail").onclick = () => $("member-team-detail").innerHTML = "";
       $("member-team-detail").scrollIntoView({behavior:"smooth",block:"start"});
     }));
@@ -198,7 +196,7 @@ function setMode(next) {
     document.querySelectorAll("[data-reject]").forEach(b => b.addEventListener("click", () => rejectProfile(b.dataset.reject)));
     document.querySelectorAll("[data-owner-team]").forEach(b => b.addEventListener("click", () => {
       const t = teamRows.find(x => x.id === b.dataset.ownerTeam);
-      $("owner-team-detail").innerHTML = `<div class="section-head"><h2>${escapeHtml(t.name)}</h2><button class="text-btn" id="close-owner-team">Close</button></div><div class="content-card">${moduleCards()}<p class="tiny muted">Team module record editing will be added in the next build stage.</p></div>`;
+      $("owner-team-detail").innerHTML = `<div class="section-head"><h2>${escapeHtml(t.name)}</h2><button class="text-btn" id="close-owner-team">Close</button></div><div class="content-card">${moduleCards(t.id)}<p class="tiny muted">Team module record editing will be added in the next build stage.</p></div>`;
       $("close-owner-team").onclick = () => $("owner-team-detail").innerHTML = "";
       $("owner-team-detail").scrollIntoView({behavior:"smooth",block:"start"});
     }));

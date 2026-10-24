@@ -858,6 +858,8 @@
   }
 
   async function init() {
+    $("loading-view").innerHTML =
+  "<p>Startup function is running...</p>";
     $("birth_date").max = new Date().toISOString().slice(0, 10);
 
     document.querySelectorAll("[data-choice]").forEach(b =>

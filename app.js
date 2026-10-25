@@ -40,7 +40,7 @@
   function notice(message, type = "success") {
     const el = $("auth-message");
     el.textContent = message;
-    el.className = notice ${type};
+    el.className = `notice ${type};
   }
 
   function clearNotice() {
@@ -72,9 +72,8 @@
       : 'Log in <span>→</span>';
 
     $("auth-heading").textContent =
-      ${selectedType === "player" ? "Player" : "Member"} ${
-        mode === "signup" ? "access request" : "login"
-      };
+  (selectedType === "player" ? "Player" : "Member") + " " +
+  (mode === "signup" ? "access request" : "login");
 
     clearNotice();
   }

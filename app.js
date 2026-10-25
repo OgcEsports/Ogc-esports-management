@@ -995,15 +995,17 @@
     );
 
   try {
-  console.log("OGC: loading teams...");
+  const timer = setTimeout(() => {
+    alert("Startup is taking too long. Check the teams query and Supabase connection.");
+  }, 8000);
+
   await loadTeams();
-  console.log("OGC: teams loaded");
+  clearTimeout(timer);
+
   await showWelcomeOrDashboard();
-  console.log("OGC: startup complete");
 } catch (e) {
   showView("welcome-view");
-  console.error("OGC startup error:", e);
-  alert("Website startup error: " + e.message);
+  alert("OGC startup error: " + (e.message || String(e)));
 }
 
     supabase.auth.onAuthStateChange((_event, session) => {

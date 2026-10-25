@@ -1,1 +1,0 @@
-# Ogc-esports-management

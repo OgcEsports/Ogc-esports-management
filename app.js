@@ -871,6 +871,7 @@
           email,
           password,
           options: {
+            emailRedirectTo: "https://ogcesports.github.io/Ogc-esports-management/",
             data: {
               full_name,
               account_type: selectedType,

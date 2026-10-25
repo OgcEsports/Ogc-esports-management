@@ -994,14 +994,17 @@
       window.OGC_CONFIG.SUPABASE_ANON_KEY
     );
 
-    try {
-      await loadTeams();
-      await showWelcomeOrDashboard();
-    } catch (e) {
-      showView("welcome-view");
-      console.error("OGC startup error:", e);
-      alert("Website startup error: " + e.message);
-    }
+  try {
+  console.log("OGC: loading teams...");
+  await loadTeams();
+  console.log("OGC: teams loaded");
+  await showWelcomeOrDashboard();
+  console.log("OGC: startup complete");
+} catch (e) {
+  showView("welcome-view");
+  console.error("OGC startup error:", e);
+  alert("Website startup error: " + e.message);
+}
 
     supabase.auth.onAuthStateChange((_event, session) => {
       if (session && !currentUser) {

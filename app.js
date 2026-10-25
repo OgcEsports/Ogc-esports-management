@@ -308,45 +308,669 @@
       $("attendance-message").textContent = "Could not load attendance: " + e.message;
     }
   }
-  async function openSubmission(team, kind) {
-    const old = $("submission-panel"); if (old) old.remove();
-    const panel = document.createElement("section");
-    panel.id = "submission-panel"; panel.className = "content-card"; panel.style.marginTop = "18px";
-    const isDrill = kind === "DRILLS";
-    panel.innerHTML = `
-      <div class="section-head"><h2>${isDrill ? "DRILL SUBMISSION" : "LOBBY OS SUBMISSION"} — ${escapeHtml(team.name)}</h2><button class="text-btn" id="submission-close">Close</button></div>
-      <p class="muted">Submit your ${isDrill ? "daily training task" : "lobby operating standards checklist"}. Your submission is saved for the owner to review.</p>
-      <form id="submission-form" style="display:grid;gap:12px;max-width:650px">
-        <label>Title *<input id="submission-title" required maxlength="120" placeholder="${isDrill ? "e.g. Daily training task" : "e.g. Custom room compliance"}" style="display:block;width:100%;margin-top:6px"></label>
-        ${isDrill ? `<label>Drill category *<select id="submission-category" required style="display:block;width:100%;margin-top:6px"><option value="">Select category</option><option>Primary</option><option>Secondary</option><option>Assaulter</option><option>One-tap</option><option>BR 1v4</option><option>Other</option></select></label>` : `<label>Checklist / OS details *<textarea id="submission-details" required rows="5" maxlength="4000" placeholder="List the OS rules followed or any issue to report" style="display:block;width:100%;margin-top:6px"></textarea></label>`}
-        ${isDrill ? `<label>Details / result *<textarea id="submission-details" required rows="4" maxlength="4000" placeholder="Kills, KD, streak, practice notes, etc." style="display:block;width:100%;margin-top:6px"></textarea></label>` : ""}
-        <label>Proof link (optional)<input id="submission-proof" type="url" maxlength="1000" placeholder="Screenshot / video link" style="display:block;width:100%;margin-top:6px"></label>
-        <button type="submit" id="submission-submit">Submit ${isDrill ? "drill" : "OS"}</button><p id="submission-status" class="tiny muted"></p>
+  
+async function openSubmission(team, kind) {
+  if (currentProfile?.account_type === "member") {
+    return alert("Managers do not need to submit player proofs.");
+  }
+
+  const old = $("submission-panel");
+  if (old) old.remove();
+
+  const isDrill = kind === "DRILLS";
+  const bucket = "ogc-player-submissions";
+
+  const panel = document.createElement("section");
+  panel.id = "submission-panel";
+  panel.className = "content-card";
+  panel.style.marginTop = "18px";
+
+  panel.innerHTML = `
+    <div class="section-head">
+      <h2>${isDrill ? "DRILL SUBMISSION" : "LOBBY OS SUBMISSION"} — ${escapeHtml(team.name)}</h2>
+      <button type="button" class="text-btn" id="submission-close">Close</button>
+    </div>
+
+    <p class="muted">
+      Upload your ${isDrill ? "training proof (image or video)" : "lobby OS screenshot"} directly.
+      Proof is required.
+    </p>
+
+    <form id="submission-form" style="display:grid;gap:12px;max-width:650px">
+      <label>Title *
+        <input id="submission-title" required maxlength="120"
+          placeholder="${isDrill ? "Daily training task" : "Lobby OS compliance"}"
+          style="display:block;width:100%;margin-top:6px">
+      </label>
+
+      ${isDrill ? `
+        <label>Drill category *
+          <select id="submission-category" required style="display:block;width:100%;margin-top:6px">
+            <option value="">Select category</option>
+            <option>Primary</option>
+            <option>Secondary</option>
+            <option>Assaulter</option>
+            <option>One-tap</option>
+            <option>BR 1v4</option>
+            <option>Other</option>
+          </select>
+        </label>
+        <label>Details / result *
+          <textarea id="submission-details" required rows="4" maxlength="4000"
+            placeholder="Kills, results, practice notes..."
+            style="display:block;width:100%;margin-top:6px"></textarea>
+        </label>
+      ` : `
+        <label>OS details *
+          <textarea id="submission-details" required rows="4" maxlength="4000"
+            placeholder="Describe the lobby OS rules followed or issue found"
+            style="display:block;width:100%;margin-top:6px"></textarea>
+        </label>
+      `}
+
+      <label>${isDrill ? "Screenshot or video proof" : "Lobby OS screenshot"} *
+        <input id="submission-proof" type="file"
+          accept="${isDrill ? "image/*,video/*" : "image/*"}" required
+          style="display:block;width:100%;margin-top:6px">
+      </label>
+
+      <p class="tiny muted">
+        Maximum file size: 25 MB. ${isDrill ? "Images and videos are accepted." : "Images only."}
+      </p>
+
+      <button type="submit" id="submission-submit">Submit</button>
+      <p id="submission-status" class="tiny muted"></p>
+    </form>
+
+    <div class="section-head"><h2>MY RECENT SUBMISSIONS</h2></div>
+    <div id="submission-history" class="tiny muted">Loading...</div>
+  `;
+
+  $("dashboard-content").appendChild(panel);
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("submission-close").onclick = () => panel.remove();
+
+  const status = $("submission-status");
+
+  async function loadMine() {
+    const { data, error } = await supabase
+      .from("team_submissions")
+      .select("id,kind,title,category,details,proof_url,status,created_at")
+      .eq("team_id", team.id)
+      .eq("user_id", currentUser.id)
+      .eq("kind", kind)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    if (error) {
+      $("submission-history").textContent = "Could not load history: " + error.message;
+      return;
+    }
+
+    const rows = [];
+
+    for (const item of data || []) {
+      let proofLink = "—";
+
+      if (item.proof_url) {
+        const { data: signed, error: signError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(item.proof_url, 3600);
+
+        if (!signError && signed?.signedUrl) {
+          proofLink = `<a href="${escapeHtml(signed.signedUrl)}" target="_blank" rel="noopener">Open proof</a>`;
+        }
+      }
+
+      rows.push(`<tr>
+        <td style="padding:8px;border-top:1px solid #333">
+          ${escapeHtml(new Date(item.created_at).toLocaleDateString("en-IN"))}
+        </td>
+        <td style="padding:8px;border-top:1px solid #333">
+          ${escapeHtml(item.title)}
+          ${item.category ? `<div class="tiny muted">${escapeHtml(item.category)}</div>` : ""}
+        </td>
+        <td style="padding:8px;border-top:1px solid #333">${escapeHtml(item.status)}</td>
+        <td style="padding:8px;border-top:1px solid #333">${proofLink}</td>
+      </tr>`);
+    }
+
+    $("submission-history").innerHTML = rows.length
+      ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+          <thead><tr><th align="left">Date</th><th align="left">Title</th><th align="left">Status</th><th align="left">Proof</th></tr></thead>
+          <tbody>${rows.join("")}</tbody>
+        </table></div>`
+      : "No submissions yet.";
+  }
+
+  $("submission-form").onsubmit = async (event) => {
+    event.preventDefault();
+
+    const button = $("submission-submit");
+    const file = $("submission-proof").files?.[0];
+
+    if (!file) {
+      status.textContent = "Please attach your proof file.";
+      return;
+    }
+
+    if (file.size > 25 * 1024 * 1024) {
+      status.textContent = "File must be 25 MB or smaller.";
+      return;
+    }
+
+    if (isDrill) {
+      if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+        status.textContent = "Upload an image or video.";
+        return;
+      }
+    } else if (!file.type.startsWith("image/")) {
+      status.textContent = "Lobby OS requires an image screenshot.";
+      return;
+    }
+
+    button.disabled = true;
+    status.textContent = "Uploading proof...";
+
+    let uploadedPath = null;
+
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      uploadedPath =
+        `${currentUser.id}/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(uploadedPath, file, {
+          upsert: false,
+          contentType: file.type
+        });
+
+      if (uploadError) throw uploadError;
+
+      const payload = {
+        team_id: team.id,
+        user_id: currentUser.id,
+        kind,
+        title: $("submission-title").value.trim(),
+        category: isDrill ? $("submission-category").value : null,
+        details: $("submission-details").value.trim(),
+        proof_url: uploadedPath,
+        status: "submitted"
+      };
+
+      const { error: insertError } = await supabase
+        .from("team_submissions")
+        .insert(payload);
+
+      if (insertError) throw insertError;
+
+      status.textContent = "Proof uploaded and submission saved successfully.";
+      $("submission-form").reset();
+      await loadMine();
+    } catch (error) {
+      status.textContent = "Submission failed: " + error.message;
+
+      // Remove an uploaded file if saving its database record failed.
+      if (uploadedPath) {
+        await supabase.storage.from(bucket).remove([uploadedPath]);
+      }
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  await loadMine();
+}
+
+async function openEvents(team, eventType) {
+  const accountType = currentProfile?.account_type;
+  const isOwner = accountType === "owner";
+  const isMember = accountType === "member";
+  const isTournament = eventType === "TOURNAMENT";
+
+  // Owner manages all schedules. Managers manage tournaments only.
+  const canEdit = isOwner || (isMember && isTournament);
+  const canDelete = isOwner;
+
+  const old = $("feature-panel");
+  if (old) old.remove();
+
+  const title = isTournament ? "TOURNAMENT SCHEDULES" : "UPCOMING SESSIONS";
+  const panel = document.createElement("section");
+  panel.id = "feature-panel";
+  panel.className = "content-card";
+  panel.style.marginTop = "18px";
+
+  panel.innerHTML = `
+    <div class="section-head">
+      <h2>${title} — ${escapeHtml(team.name)}</h2>
+      <button type="button" class="text-btn" id="feature-close">Close</button>
+    </div>
+
+    ${canEdit ? `
+      <form id="event-form" style="display:grid;gap:12px;max-width:650px;margin-bottom:20px">
+        <label>${isTournament ? "Tournament name" : "Session name"} *
+          <input id="event-title" required maxlength="160"
+            style="display:block;width:100%;margin-top:6px"
+            placeholder="${isTournament ? "Tournament name" : "Training session name"}">
+        </label>
+
+        <label>Date *
+          <input id="event-date" type="date" required
+            style="display:block;width:100%;margin-top:6px">
+        </label>
+
+        <label>Time *
+          <input id="event-time" type="time" required
+            style="display:block;width:100%;margin-top:6px">
+        </label>
+
+        ${!isTournament ? `
+          <label>Session taken by *
+            <input id="event-conductor" required maxlength="120"
+              style="display:block;width:100%;margin-top:6px"
+              placeholder="Trainer's name">
+          </label>
+        ` : ""}
+
+        <label>Description (optional)
+          <textarea id="event-description" maxlength="2000" rows="3"
+            style="display:block;width:100%;margin-top:6px"
+            placeholder="Tournament details, rules, venue, room details, or notes"></textarea>
+        </label>
+
+        <button type="submit" id="event-save">
+          Add ${isTournament ? "tournament" : "session"}
+        </button>
+        <p id="event-status" class="tiny muted"></p>
       </form>
-      <div class="section-head"><h2>MY RECENT SUBMISSIONS</h2></div><div id="submission-history" class="tiny muted">Loading…</div>`;
-    $("dashboard-content").appendChild(panel); panel.scrollIntoView({behavior:"smooth",block:"start"});
-    $("submission-close").onclick=()=>panel.remove();
-    const status=$("submission-status");
-    async function loadMine(){
-      const {data,error}=await supabase.from("team_submissions").select("id,kind,title,category,details,proof_url,status,created_at").eq("team_id",team.id).eq("user_id",currentUser.id).eq("kind",kind).order("created_at",{ascending:false}).limit(10);
-      if(error){$("submission-history").textContent="Could not load history: "+error.message;return;}
-      $("submission-history").innerHTML=data.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Date</th><th align="left">Title</th><th align="left">Status</th><th align="left">Proof</th></tr></thead><tbody>${data.map(x=>`<tr><td style="padding:8px;border-top:1px solid #333">${new Date(x.created_at).toLocaleDateString("en-IN")}</td><td style="padding:8px;border-top:1px solid #333">${escapeHtml(x.title)}${x.category?`<div class="tiny muted">${escapeHtml(x.category)}</div>`:""}</td><td style="padding:8px;border-top:1px solid #333">${escapeHtml(x.status)}</td><td style="padding:8px;border-top:1px solid #333">${x.proof_url?`<a href="${escapeHtml(x.proof_url)}" target="_blank" rel="noopener">Open</a>`:"—"}</td></tr>`).join("")}</tbody></table></div>`:"No submissions yet.";
-      $("submission-history").querySelectorAll("[data-proof-path]").forEach(async b => {
-        b.onclick = async () => {
-          const {data: signed, error: signError} = await supabase.storage.from("ogc-player-submissions").createSignedUrl(b.dataset.proofPath, 3600);
-          if (signError) return alert(signError.message);
-          window.open(signed.signedUrl, "_blank", "noopener");
+    ` : `
+      <p class="muted">
+        ${isMember
+          ? "Managers can view schedules but can only edit tournament schedules."
+          : "Schedules are available to view here."}
+      </p>
+    `}
+
+    <div id="events-list" class="tiny muted">Loading schedule...</div>
+  `;
+
+  $("dashboard-content").appendChild(panel);
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("feature-close").onclick = () => panel.remove();
+
+  async function loadEvents() {
+    const { data, error } = await supabase
+      .from("portal_events")
+      .select("id,team_id,event_type,title,event_date,event_time,conductor,description,created_by")
+      .eq("team_id", team.id)
+      .eq("event_type", eventType)
+      .order("event_date", { ascending: true })
+      .order("event_time", { ascending: true });
+
+    if (error) {
+      $("events-list").textContent = "Could not load schedule: " + error.message;
+      return;
+    }
+
+    const events = data || [];
+
+    $("events-list").innerHTML = events.length
+      ? events.map(ev => `
+        <article class="content-card" style="margin:10px 0">
+          <h3>${escapeHtml(ev.title)}</h3>
+          <p>📅 ${escapeHtml(ev.event_date)} · 🕒 ${escapeHtml(String(ev.event_time || "").slice(0, 5))}</p>
+          ${!isTournament ? `<p>👤 Session taken by: <strong>${escapeHtml(ev.conductor || "—")}</strong></p>` : ""}
+          ${ev.description ? `<p>${escapeHtml(ev.description)}</p>` : ""}
+          ${canEdit ? `
+            <button type="button" class="secondary-btn small" data-event-edit="${ev.id}">Edit</button>
+          ` : ""}
+          ${canDelete ? `
+            <button type="button" class="secondary-btn small" data-event-delete="${ev.id}">Delete</button>
+          ` : ""}
+        </article>
+      `).join("")
+      : "No events scheduled yet.";
+
+    panel.querySelectorAll("[data-event-edit]").forEach(button => {
+      button.onclick = () => {
+        const ev = events.find(item => String(item.id) === button.dataset.eventEdit);
+        if (!ev) return;
+
+        $("event-title").value = ev.title || "";
+        $("event-date").value = ev.event_date || "";
+        $("event-time").value = String(ev.event_time || "").slice(0, 5);
+
+        if ($("event-conductor")) {
+          $("event-conductor").value = ev.conductor || "";
+        }
+
+        $("event-description").value = ev.description || "";
+        $("event-form").dataset.editId = ev.id;
+        $("event-save").textContent = "Save changes";
+        $("event-status").textContent = "Editing selected schedule item.";
+        $("event-form").scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+    });
+
+    panel.querySelectorAll("[data-event-delete]").forEach(button => {
+      button.onclick = async () => {
+        if (!canDelete) return alert("Only the owner can delete schedules.");
+        if (!confirm("Delete this schedule item?")) return;
+
+        const { error: deleteError } = await supabase
+          .from("portal_events")
+          .delete()
+          .eq("id", button.dataset.eventDelete)
+          .eq("team_id", team.id)
+          .eq("event_type", eventType);
+
+        if (deleteError) {
+          alert("Could not delete schedule: " + deleteError.message);
+          return;
+        }
+
+        await loadEvents();
+      };
+    });
+  }
+
+  if (canEdit) {
+    $("event-form").onsubmit = async event => {
+      event.preventDefault();
+
+      const button = $("event-save");
+      const message = $("event-status");
+      button.disabled = true;
+      message.textContent = "Saving schedule...";
+
+      try {
+        const payload = {
+          team_id: team.id,
+          event_type: eventType,
+          title: $("event-title").value.trim(),
+          event_date: $("event-date").value,
+          event_time: $("event-time").value,
+          conductor: !isTournament ? $("event-conductor").value.trim() : null,
+          description: $("event-description").value.trim() || null
+        };
+
+        const editId = $("event-form").dataset.editId;
+        let result;
+
+        if (editId) {
+          result = await supabase
+            .from("portal_events")
+            .update(payload)
+            .eq("id", editId)
+            .eq("team_id", team.id)
+            .eq("event_type", eventType);
+        } else {
+          result = await supabase
+            .from("portal_events")
+            .insert({
+              ...payload,
+              created_by: currentUser.id
+            });
+        }
+
+        if (result.error) throw result.error;
+
+        $("event-form").reset();
+        delete $("event-form").dataset.editId;
+        $("event-save").textContent =
+          "Add " + (isTournament ? "tournament" : "session");
+        message.textContent = "Schedule saved successfully.";
+
+        await loadEvents();
+      } catch (error) {
+        message.textContent = "Could not save schedule: " + error.message;
+      } finally {
+        button.disabled = false;
+      }
+    };
+  }
+
+  await loadEvents();
+}
+
+async function openDoubtBox(team) {
+  const isOwner = currentProfile?.account_type === "owner";
+  const isMember = currentProfile?.account_type === "member";
+
+  const old = $("doubt-panel");
+  if (old) old.remove();
+
+  const panel = document.createElement("section");
+  panel.id = "doubt-panel";
+  panel.className = "content-card";
+  panel.style.marginTop = "18px";
+
+  panel.innerHTML = `
+    <div class="section-head">
+      <h2>DOUBT BOX — ${escapeHtml(team.name)}</h2>
+      <button type="button" class="text-btn" id="doubt-close">Close</button>
+    </div>
+
+    ${isOwner || isMember ? `
+      <p class="muted">Review questions submitted by players.</p>
+    ` : `
+      <form id="doubt-form" style="display:grid;gap:12px;max-width:650px">
+        <label>Your question *
+          <textarea id="doubt-question" required maxlength="4000" rows="4"
+            placeholder="Describe your doubt..."
+            style="display:block;width:100%;margin-top:6px"></textarea>
+        </label>
+
+        <label>Attachment (optional)
+          <input id="doubt-files" type="file" multiple
+            accept="image/*,video/*"
+            style="display:block;width:100%;margin-top:6px">
+        </label>
+
+        <p class="tiny muted">Maximum 25 MB per file. Photos and videos are accepted.</p>
+        <button type="submit" id="doubt-submit">Submit question</button>
+        <p id="doubt-status" class="tiny muted"></p>
+      </form>
+    `}
+
+    <div class="section-head"><h2>${isOwner || isMember ? "PLAYER QUESTIONS" : "MY QUESTIONS"}</h2></div>
+    <div id="doubt-list" class="tiny muted">Loading questions...</div>
+  `;
+
+  $("dashboard-content").appendChild(panel);
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("doubt-close").onclick = () => panel.remove();
+
+  async function loadDoubts() {
+    let query = supabase
+      .from("doubt_submissions")
+      .select("id,team_id,user_id,question,attachment_paths,status,owner_response,created_at")
+      .eq("team_id", team.id)
+      .order("created_at", { ascending: false });
+
+    // Players see their own questions. Owner and managers can review team questions.
+    if (!isOwner && !isMember) {
+      query = query.eq("user_id", currentUser.id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      $("doubt-list").textContent = "Could not load questions: " + error.message;
+      return;
+    }
+
+    const items = data || [];
+
+    if (!items.length) {
+      $("doubt-list").textContent = "No questions submitted yet.";
+      return;
+    }
+
+    const rendered = [];
+
+    for (const item of items) {
+      const links = [];
+
+      for (const path of (item.attachment_paths || [])) {
+        const { data: signed, error: signError } = await supabase.storage
+          .from("ogc-doubt-attachments")
+          .createSignedUrl(path, 3600);
+
+        if (!signError && signed?.signedUrl) {
+          links.push(
+            `<a href="${escapeHtml(signed.signedUrl)}" target="_blank" rel="noopener">Open attachment</a>`
+          );
+        }
+      }
+
+      rendered.push(`
+        <article class="content-card" style="margin:10px 0">
+          <p class="tiny muted">${escapeHtml(new Date(item.created_at).toLocaleString("en-IN"))}</p>
+          <h3>Question</h3>
+          <p style="white-space:pre-wrap">${escapeHtml(item.question)}</p>
+          ${links.length ? `<p>${links.join(" · ")}</p>` : ""}
+          <p>Status: <strong>${escapeHtml(item.status || "open")}</strong></p>
+
+          ${item.owner_response ? `
+            <div style="border-left:3px solid #e63946;padding:10px;margin-top:10px">
+              <strong>Owner response</strong>
+              <p style="white-space:pre-wrap">${escapeHtml(item.owner_response)}</p>
+            </div>
+          ` : ""}
+
+          ${isOwner ? `
+            <form data-doubt-reply="${item.id}" style="display:grid;gap:8px;margin-top:12px">
+              <label>Owner response
+                <textarea name="response" required maxlength="4000" rows="3"
+                  placeholder="Write your answer..."
+                  style="display:block;width:100%;margin-top:6px">${escapeHtml(item.owner_response || "")}</textarea>
+              </label>
+              <button type="submit" class="secondary-btn small">Save response</button>
+            </form>
+          ` : ""}
+        </article>
+      `);
+    }
+
+    $("doubt-list").innerHTML = rendered.join("");
+
+    if (isOwner) {
+      $("doubt-list").querySelectorAll("[data-doubt-reply]").forEach(form => {
+        form.onsubmit = async event => {
+          event.preventDefault();
+
+          const response = new FormData(form).get("response").trim();
+          if (!response) return;
+
+          const button = form.querySelector("button");
+          button.disabled = true;
+          button.textContent = "Saving...";
+
+          try {
+            const { error: updateError } = await supabase
+              .from("doubt_submissions")
+              .update({
+                owner_response: response,
+                status: "answered",
+                updated_at: new Date().toISOString()
+              })
+              .eq("id", form.dataset.doubtReply);
+
+            if (updateError) throw updateError;
+
+            await loadDoubts();
+          } catch (error) {
+            alert("Could not save response: " + error.message);
+            button.disabled = false;
+            button.textContent = "Save response";
+          }
         };
       });
     }
-    $("submission-form").onsubmit=async e=>{
-      e.preventDefault(); const btn=$("submission-submit");btn.disabled=true;status.textContent="Submitting…";
-      try{const payload={team_id:team.id,user_id:currentUser.id,kind,title:$("submission-title").value.trim(),category:isDrill?$("submission-category").value:null,details:$("submission-details").value.trim(),proof_url:$("submission-proof").value.trim()||null};
-        const {error}=await supabase.from("team_submissions").insert(payload);if(error)throw error;status.textContent="Submitted successfully.";$("submission-form").reset();await loadMine();
-      }catch(e){status.textContent="Submission failed: "+e.message;}finally{btn.disabled=false;}
-    };
-    await loadMine();
   }
+
+  if (!isOwner && !isMember) {
+    $("doubt-form").onsubmit = async event => {
+      event.preventDefault();
+
+      const button = $("doubt-submit");
+      const status = $("doubt-status");
+      const question = $("doubt-question").value.trim();
+      const files = Array.from($("doubt-files").files || []);
+
+      if (!question) {
+        status.textContent = "Please enter your question.";
+        return;
+      }
+
+      if (files.some(file => file.size > 25 * 1024 * 1024)) {
+        status.textContent = "Each attachment must be 25 MB or smaller.";
+        return;
+      }
+
+      if (files.some(file =>
+        !file.type.startsWith("image/") && !file.type.startsWith("video/")
+      )) {
+        status.textContent = "Only photo and video attachments are accepted.";
+        return;
+      }
+
+      button.disabled = true;
+      status.textContent = "Uploading question and attachments...";
+
+      const uploadedPaths = [];
+
+      try {
+        for (const file of files) {
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const path =
+            `${currentUser.id}/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from("ogc-doubt-attachments")
+            .upload(path, file, {
+              upsert: false,
+              contentType: file.type
+            });
+
+          if (uploadError) throw uploadError;
+          uploadedPaths.push(path);
+        }
+
+        const { error: insertError } = await supabase
+          .from("doubt_submissions")
+          .insert({
+            team_id: team.id,
+            user_id: currentUser.id,
+            question,
+            attachment_paths: uploadedPaths,
+            status: "open"
+          });
+
+        if (insertError) throw insertError;
+
+        status.textContent = "Question submitted successfully.";
+        $("doubt-form").reset();
+        await loadDoubts();
+      } catch (error) {
+        status.textContent = "Could not submit question: " + error.message;
+
+        if (uploadedPaths.length) {
+          await supabase.storage
+            .from("ogc-doubt-attachments")
+            .remove(uploadedPaths);
+        }
+      } finally {
+        button.disabled = false;
+      }
+    };
+  }
+
+  await loadDoubts();
+}
 
   document.addEventListener("click", async function(event) {
     const button = event.target.closest("[data-module]"); if (!button) return;
@@ -356,6 +980,9 @@
     try {
       if (module[1] === "ATTENDANCE") return await openAttendance(team);
       if (module[1] === "DRILLS" || module[1] === "LOBBY OS") return await openSubmission(team, module[1]);
+      if (module[1] === "DOUBT BOX") return await openDoubtBox(team);
+      if (module[1] === "TOURNAMENT SCHEDULES") return await openEvents(team, "TOURNAMENT");
+      if (module[1] === "UPCOMING SESSIONS") return await openEvents(team, "SESSION");
       alert(module[1] + "\nTeam: " + team.name + "\n\nThis module is not enabled yet.");
     } catch (e) { alert("Could not open module: " + e.message); }
   });

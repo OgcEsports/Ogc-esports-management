@@ -99,5 +99,42 @@
     </section>
   </main>
   <footer><span>OGC ESPORTS</span><span>PRIVATE MANAGEMENT PORTAL</span></footer>
+  script>
+
+(function () {
+
+  function fixLoadingScreen() {
+
+    var loading = document.getElementById("loading-view");
+
+    var welcome = document.getElementById("welcome-view");
+
+    if (loading && welcome) {
+
+      loading.classList.add("hidden");
+
+      welcome.classList.remove("hidden");
+
+    }
+
+  }
+
+  if (document.readyState === "loading") {
+
+    document.addEventListener("DOMContentLoaded", function () {
+
+      setTimeout(fixLoadingScreen, 2000);
+
+    });
+
+  } else {
+
+    setTimeout(fixLoadingScreen, 2000);
+
+  }
+
+})();
+
+</script>
 </body>
 </html>

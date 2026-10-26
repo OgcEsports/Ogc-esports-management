@@ -22,16 +22,16 @@ footer{display:flex;justify-content:space-between;gap:10px;padding:22px clamp(18
 @media(max-width:760px){.shell{margin:28px auto 45px}.topbar{height:70px}.choice-grid{grid-template-columns:1fr}.choice-card{min-height:150px}.choice-icon{margin-bottom:14px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.team-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.two-col{grid-template-columns:1fr}.module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-heading{align-items:flex-start;flex-direction:column}.dashboard-heading h1{font-size:46px}.dashboard-actions{width:100%;justify-content:space-between}}
 @media(max-width:430px){.team-grid,.module-grid{grid-template-columns:1fr}.brand-mark{font-size:29px}.brand-copy{font-size:11px}.brand-copy small{font-size:8px}.stats-grid{gap:8px}.stat-card{padding:13px}.stat-value{font-size:29px}footer{font-size:8px}}
 
-/* OGC ESPORTS full-screen loading view */
+/* OGC ESPORTS full-screen centered logo */
 #loading-view {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100vh;
-  min-height: 100dvh;
+  height: 100dvh;
   max-width: none;
   margin: 0;
-  padding: 0;
+  padding: 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -47,20 +47,19 @@ footer{display:flex;justify-content:space-between;gap:10px;padding:22px clamp(18
 }
 
 #loading-view .loader {
-  width: 80vw;
-  height: 80vw;
-  max-width: 420px;
-  max-height: 420px;
-  border-radius: 0;
-  background-image: url("./icons/icon-512.png");
-  background-size: contain;
-  background-position: center;
-  background-repeat: no-repeat;
+  width: min(85vw, 460px);
+  height: min(85vw, 460px);
+  flex-shrink: 0;
   border: none;
+  border-radius: 0;
+  background: url("./icons/icon-512.png") center / contain no-repeat;
   animation: none;
 }
 
 #loading-view p {
   color: #08BAFF;
-  margin-top: 18px;
+  font-size: 16px;
+  text-align: center;
+  margin-top: 16px;
 }
+

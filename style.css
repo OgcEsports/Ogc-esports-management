@@ -58,7 +58,7 @@ footer{display:flex;justify-content:space-between;gap:10px;padding:22px clamp(18
   background-image: url("./icons/icon-512.png");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: cover;
+  background-size: contain;
   animation: none;
   flex-shrink: 0;
 }

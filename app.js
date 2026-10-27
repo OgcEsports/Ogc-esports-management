@@ -34,8 +34,11 @@
   let teams = [];
 
   function showView(id) {
-    views.forEach(v => $(v).classList.toggle("hidden", v !== id));
-  }
+  views.forEach(v => {
+    if (v === "loading-view") return;
+    $(v).classList.toggle("hidden", v !== id);
+  });
+}
 
   function notice(message, type = "success") {
     const el = $("auth-message");
@@ -1550,13 +1553,28 @@ async function openDoubtBox(team) {
       }
     });
   }
-// OGC ESPORTS splash screen: show for 4 seconds
-const splash = document.getElementById("loading-view");
+// OGC ESPORTS splash: 4 seconds after image loads
+const splash = $("loading-view");
+const splashImage = splash?.querySelector(".splash-image");
 
-if (splash) {
-  setTimeout(() => {
-    splash.classList.add("hidden");
-  }, 4000);
+if (splash && splashImage) {
+  let timerStarted = false;
+
+  const startSplashTimer = () => {
+    if (timerStarted) return;
+    timerStarted = true;
+
+    setTimeout(() => {
+      splash.classList.add("hidden");
+    }, 4000);
+  };
+
+  if (splashImage.complete) {
+    startSplashTimer();
+  } else {
+    splashImage.addEventListener("load", startSplashTimer, { once: true });
+    splashImage.addEventListener("error", startSplashTimer, { once: true });
+  }
 }
   document.addEventListener("DOMContentLoaded", init);
 })();

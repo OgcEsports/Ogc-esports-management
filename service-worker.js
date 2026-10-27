@@ -1,5 +1,5 @@
 
-const CACHE_NAME = "ogc-esports-v2";
+const CACHE_NAME = "ogc-esports-v3";
 
 const APP_FILES = [
   "./",

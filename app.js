@@ -1550,6 +1550,16 @@ async function openDoubtBox(team) {
       }
     });
   }
+// OGC ESPORTS splash screen: show for 3.5 seconds
+const splashTimer = () => {
+  const splash = document.getElementById("loading-view");
+  if (!splash) return;
 
+  setTimeout(() => {
+    splash.classList.add("hidden");
+  }, 3500);
+};
+
+splashTimer();
   document.addEventListener("DOMContentLoaded", init);
 })();

@@ -323,10 +323,12 @@ $("#attendance-mark")?.addEventListener("click", async () => {
   }
   
 async function openSubmission(team, kind) {
-  if (currentProfile?.account_type === "member") {
-    return alert("Managers do not need to submit player proofs.");
-  }
-
+  if (
+  currentProfile?.account_type === "owner" ||
+  currentProfile?.account_type === "member"
+) {
+  return;
+}
   const old = $("submission-panel");
   if (old) old.remove();
 
@@ -405,29 +407,65 @@ async function openSubmission(team, kind) {
 
   const status = $("submission-status");
 
-  
-async function loadMine() {
-  let query = supabase
-    .from("team_submissions")
-    .select("id,kind,title,category,details,proof_url,status,created_at,user_id")
-    .eq("team_id", team.id)
-    .eq("kind", kind)
-    .order("created_at", { ascending: false })
-    .limit(100);
+  async function loadmine() {
+let query = supabase
+  .from("team_submissions")
+  .select("id,kind,title,category,details,proof_url,status,created_at,user_id")
+  .eq("team_id", team.id)
+  .eq("kind", kind)
+  .order("created_at", { ascending: false })
+  .limit(100);
 
-  if (currentProfile?.account_type !== "owner" &&
-      currentProfile?.account_type !== "member") {
-    query = query.eq("user_id", currentUser.id);
-  }
+if (
+  currentProfile?.account_type !== "owner" &&
+  currentProfile?.account_type !== "member"
+) {
+  query = query.eq("user_id", currentUser.id);
+}
 
-  const { data, error } = await query;
-
+const { data, error } = await query;
 
     if (error) {
-      $("submission-history").textContent = "Could not load history: " + error.message;
+      $("submission-history").textContent = "Could not load submission: " + error.message;
       return;
     }
+  $("submission-history").innerHTML = data.length
 
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+
+        <thead><tr>
+
+          <th align="left">Date</th>
+
+          <th align="left">Player ID</th>
+
+          <th align="left">Title</th>
+
+          <th align="left">Status</th>
+
+          <th align="left">Proof</th>
+
+        </tr></thead>
+
+        <tbody>${data.map(x => `<tr>
+
+          <td style="padding:8px;border-top:1px solid #333">${new Date(x.created_at).toLocaleDateString("en-IN")}</td>
+
+          <td style="padding:8px;border-top:1px solid #333">${escapeHtml(x.user_id)}</td>
+
+          <td style="padding:8px;border-top:1px solid #333">${escapeHtml(x.title)}</td>
+
+          <td style="padding:8px;border-top:1px solid #333">${escapeHtml(x.status)}</td>
+
+          <td style="padding:8px;border-top:1px solid #333">${x.proof_url ? `<a href="${escapeHtml(x.proof_url)}" target="_blank" rel="noopener">Open proof</a>` : "—"}</td>
+
+        </tr>`).join("")}</tbody>
+
+      </table></div>`
+
+    : "No submissions yet.";
+
+}
     const rows = [];
 
     for (const item of data || []) {

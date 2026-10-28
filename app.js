@@ -1609,28 +1609,15 @@ async function openDoubtBox(team) {
       }
     });
   }
-// OGC ESPORTS splash: 4 seconds after image loads
-const splash = $("loading-view");
-const splashImage = splash?.querySelector(".splash-image");
 
-if (splash && splashImage) {
-  let timerStarted = false;
+const splash = document.querySelector("#splash");
 
-  const startSplashTimer = () => {
-    if (timerStarted) return;
-    timerStarted = true;
+if (splash) {
+  window.setTimeout(() => {
+    splash.classList.add("hidden");
+  }, 4000);
+}
 
-    setTimeout(() => {
-      splash.classList.add("hidden");
-    }, 4000);
-  };
-
-  if (splashImage.complete) {
-    startSplashTimer();
-  } else {
-    splashImage.addEventListener("load", startSplashTimer, { once: true });
-    splashImage.addEventListener("error", startSplashTimer, { once: true });
-  }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
 } else {

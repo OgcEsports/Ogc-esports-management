@@ -405,15 +405,23 @@ async function openSubmission(team, kind) {
 
   const status = $("submission-status");
 
-  async function loadMine() {
-    const { data, error } = await supabase
-      .from("team_submissions")
-      .select("id,kind,title,category,details,proof_url,status,created_at")
-      .eq("team_id", team.id)
-      .eq("user_id", currentUser.id)
-      .eq("kind", kind)
-      .order("created_at", { ascending: false })
-      .limit(10);
+  
+async function loadMine() {
+  let query = supabase
+    .from("team_submissions")
+    .select("id,kind,title,category,details,proof_url,status,created_at,user_id")
+    .eq("team_id", team.id)
+    .eq("kind", kind)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (currentProfile?.account_type !== "owner" &&
+      currentProfile?.account_type !== "member") {
+    query = query.eq("user_id", currentUser.id);
+  }
+
+  const { data, error } = await query;
+
 
     if (error) {
       $("submission-history").textContent = "Could not load history: " + error.message;

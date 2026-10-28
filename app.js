@@ -1631,6 +1631,8 @@ if (splash && splashImage) {
     splashImage.addEventListener("load", startSplashTimer, { once: true });
     splashImage.addEventListener("error", startSplashTimer, { once: true });
   }
-}
+if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
-})();
+} else {
+  init();
+}

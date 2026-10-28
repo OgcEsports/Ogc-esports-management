@@ -71,5 +71,5 @@ self.addEventListener("fetch", event => {
         await caches.match(request)
       ) || Response.error();
     })
-  );
+    );
 });

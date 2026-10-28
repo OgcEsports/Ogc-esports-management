@@ -1610,7 +1610,7 @@ async function openDoubtBox(team) {
     });
   }
 
-const splash = document.querySelector("#splash");
+const splash = document.querySelector("#loading-view");
 
 if (splash) {
   window.setTimeout(() => {

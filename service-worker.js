@@ -1,12 +1,14 @@
 const CACHE_NAME = "ogc-esports-v4";
-
 const APP_FILES = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
-  "./config.js",
-  "./manifest.json"
+  "./core.js",
+  "./manifest.json",
+  "./splash-original.png",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png"
 ];
 
 self.addEventListener("install", event => {

@@ -289,21 +289,31 @@
 
     $("attendance-load")?.addEventListener("click", () => loadAttendance().catch(e => alert(e.message)));
 
-    $("attendance-mark")?.addEventListener("click", async () => {
-      const button = $("attendance-mark");
-      button.disabled = true;
-      button.textContent = "Submitting…";
-      try {
-        const { error } = await supabase.rpc("mark_my_attendance");
-        if (error) throw error;
-        alert("Attendance marked as Present.");
-        await loadAttendance();
-      } catch (e) {
-        alert(e.message || "Could not mark attendance.");
-        button.disabled = false;
-        button.textContent = "Mark My Attendance — Present";
-      }
-    });
+    
+$("#attendance-mark")?.addEventListener("click", async () => {
+  const button = $("#attendance-mark");
+
+  if (!button || button.disabled) return;
+
+  button.disabled = true;
+  button.textContent = "Submitting...";
+
+  try {
+    const { error } = await supabase.rpc("mark_my_attendance");
+
+    if (error) throw error;
+
+    await loadAttendance();
+
+    alert("Attendance marked as Present.");
+  } catch (e) {
+    alert(e.message || "Could not mark attendance.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Mark My Attendance – Present";
+  }
+});
+
 
     try {
       await loadAttendance();

@@ -1,10 +1,9 @@
-const CACHE_NAME = "ogc-esports-v4";
+const CACHE_NAME = "ogc-esports-v5";
 const APP_FILES = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
-  "./core.js",
   "./manifest.json",
   "./splash-original.png",
   "./icons/icon-192.png",

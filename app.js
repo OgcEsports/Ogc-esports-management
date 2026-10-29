@@ -113,13 +113,24 @@
   }
 
   async function loadTeams() {
-    const { data, error } = await supabase
-      .from("teams")
-      .select("id,name")
-      .order("name");
+    // Teams are public, so load them with a plain request. This avoids
+    // any auth-lock hang inside the Supabase library at startup.
+    const res = await fetch(
+      window.OGC_CONFIG.SUPABASE_URL +
+        "/rest/v1/teams?select=id,name&order=name.asc",
+      {
+        headers: {
+          apikey: window.OGC_CONFIG.SUPABASE_ANON_KEY,
+          Authorization: "Bearer " + window.OGC_CONFIG.SUPABASE_ANON_KEY
+        }
+      }
+    );
 
-    if (error) throw error;
+    if (!res.ok) {
+      throw new Error("Could not load teams (" + res.status + ")");
+    }
 
+    const data = await res.json();
     teams = data || [];
 
     $("team_id").innerHTML =
@@ -1580,7 +1591,13 @@ async function openDoubtBox(team) {
 
     supabase = window.supabase.createClient(
       window.OGC_CONFIG.SUPABASE_URL,
-      window.OGC_CONFIG.SUPABASE_ANON_KEY
+      window.OGC_CONFIG.SUPABASE_ANON_KEY,
+      {
+        auth: {
+          // Prevents the browser Web Locks freeze that can hang all requests.
+          lock: async (_name, _acquireTimeout, fn) => await fn()
+        }
+      }
     );
 
     try {

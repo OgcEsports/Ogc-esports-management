@@ -42,7 +42,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b7";
+  const APP_BUILD = "b8";
 
   function resetSavedLogin() {
     try {
@@ -365,12 +365,9 @@
   }
   
 async function openSubmission(team, kind) {
-  if (
-  currentProfile?.account_type === "owner" ||
-  currentProfile?.account_type === "member"
-) {
-  return;
-}
+  const isReviewer =
+    currentProfile?.account_type === "owner" ||
+    currentProfile?.account_type === "member";
   const old = $("submission-panel");
   if (old) old.remove();
 
@@ -447,6 +444,18 @@ async function openSubmission(team, kind) {
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
   $("submission-close").onclick = () => panel.remove();
 
+  if (isReviewer) {
+    // Owners and members only review; they do not upload.
+    panel.querySelector("h2").textContent =
+      (isDrill ? "DRILL SUBMISSIONS" : "LOBBY OS SUBMISSIONS") + " — " + team.name;
+    const intro = panel.querySelector("p.muted");
+    if (intro) intro.remove();
+    const formEl = $("submission-form");
+    if (formEl) formEl.remove();
+    const heads = panel.querySelectorAll(".section-head h2");
+    if (heads[1]) heads[1].textContent = "ALL PLAYER SUBMISSIONS";
+  }
+
   const status = $("submission-status");
 
   async function loadMine() {
@@ -474,6 +483,17 @@ async function openSubmission(team, kind) {
 
     const rows = [];
 
+    // Look up player names so reviewers see names instead of long IDs.
+    const nameById = new Map();
+    const ids = [...new Set((data || []).map(x => x.user_id))];
+    if (ids.length) {
+      const { data: people } = await supabase
+        .from("profiles")
+        .select("id,full_name,ign")
+        .in("id", ids);
+      (people || []).forEach(p => nameById.set(p.id, p.ign || p.full_name));
+    }
+
     for (const item of data || []) {
       let proofLink = "—";
 
@@ -489,10 +509,11 @@ async function openSubmission(team, kind) {
 
       rows.push(`<tr>
         <td style="padding:8px;border-top:1px solid #333">${escapeHtml(new Date(item.created_at).toLocaleDateString("en-IN"))}</td>
-        <td style="padding:8px;border-top:1px solid #333">${escapeHtml(item.user_id)}</td>
+        <td style="padding:8px;border-top:1px solid #333">${escapeHtml(nameById.get(item.user_id) || item.user_id)}</td>
         <td style="padding:8px;border-top:1px solid #333">
           ${escapeHtml(item.title)}
           ${item.category ? `<div class="tiny muted">${escapeHtml(item.category)}</div>` : ""}
+          ${item.details ? `<div class="tiny muted" style="white-space:pre-wrap;max-width:320px">${escapeHtml(item.details)}</div>` : ""}
         </td>
         <td style="padding:8px;border-top:1px solid #333">${escapeHtml(item.status)}</td>
         <td style="padding:8px;border-top:1px solid #333">${proofLink}</td>
@@ -501,13 +522,14 @@ async function openSubmission(team, kind) {
 
     $("submission-history").innerHTML = rows.length
       ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-          <thead><tr><th align="left">Date</th><th align="left">Player ID</th><th align="left">Title</th><th align="left">Status</th><th align="left">Proof</th></tr></thead>
+          <thead><tr><th align="left">Date</th><th align="left">Player</th><th align="left">Title</th><th align="left">Status</th><th align="left">Proof</th></tr></thead>
           <tbody>${rows.join("")}</tbody>
         </table></div>`
       : "No submissions yet.";
   }
 
-  $("submission-form").onsubmit = async (event) => {
+  const submissionFormEl = $("submission-form") || {};
+  submissionFormEl.onsubmit = async (event) => {
     event.preventDefault();
 
     const button = $("submission-submit");

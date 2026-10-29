@@ -42,7 +42,18 @@
     if (sp) sp.classList.add("hidden");
   }
 
+  const APP_BUILD = "b6";
+
+  function resetSavedLogin() {
+    try {
+      Object.keys(localStorage)
+        .filter(k => k.startsWith("sb-"))
+        .forEach(k => localStorage.removeItem(k));
+    } catch (_) {}
+  }
+
   function showStartupProblem(message) {
+    message = message + " [" + APP_BUILD + "]";
     showView("welcome-view");
     const old = $("startup-problem");
     if (old) old.remove();
@@ -1602,7 +1613,15 @@ async function openDoubtBox(team) {
 
     try {
       await withTimeout(loadTeams(), 10000, "Loading teams");
-      await withTimeout(showWelcomeOrDashboard(), 10000, "Checking login");
+      try {
+        await withTimeout(showWelcomeOrDashboard(), 8000, "Checking login");
+      } catch (loginErr) {
+        console.warn("Login check failed, resetting saved session:", loginErr);
+        resetSavedLogin();
+        currentUser = null;
+        currentProfile = null;
+        showView("welcome-view");
+      }
     } catch (e) {
       console.error("OGC startup error:", e);
       showStartupProblem("Startup error: " + (e && e.message ? e.message : e));

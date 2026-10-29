@@ -42,7 +42,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b6";
+  const APP_BUILD = "b7";
 
   function resetSavedLogin() {
     try {
@@ -271,7 +271,7 @@
       </div>` : ""}
       <p class="tiny muted" id="attendance-message">Loading attendance…</p>
       <div id="attendance-list"></div>
-      ${(!isOwner && !isMember) ? `<button type="button" id="attendance-mark" style="margin-top:14px">Mark My Attendance — Present</button>` : ""}
+      ${(!isOwner && !isMember) ? `<button type="button" class="primary-btn" id="attendance-mark" style="margin-top:14px">Mark My Attendance — Present</button>` : ""}
     `;
     $("dashboard-content").appendChild(panel);
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -334,30 +334,28 @@
     $("attendance-load")?.addEventListener("click", () => loadAttendance().catch(e => alert(e.message)));
 
     
-$("#attendance-mark")?.addEventListener("click", async () => {
-  const button = $("#attendance-mark");
+    const markBtn = $("attendance-mark");
+    if (markBtn) {
+      markBtn.addEventListener("click", async () => {
+        if (markBtn.disabled) return;
 
-  if (!button || button.disabled) return;
+        markBtn.disabled = true;
+        markBtn.textContent = "Submitting...";
 
-  button.disabled = true;
-  button.textContent = "Submitting...";
+        try {
+          const { error } = await supabase.rpc("mark_my_attendance");
+          if (error) throw error;
 
-  try {
-    const { error } = await supabase.rpc("mark_my_attendance");
-
-    if (error) throw error;
-
-    await loadAttendance();
-
-    alert("Attendance marked as Present.");
-  } catch (e) {
-    alert(e.message || "Could not mark attendance.");
-  } finally {
-    button.disabled = false;
-    button.textContent = "Mark My Attendance – Present";
-  }
-});
-
+          await loadAttendance();
+          alert("Attendance marked as Present.");
+        } catch (e) {
+          alert(e.message || "Could not mark attendance.");
+          markBtn.disabled = false;
+        } finally {
+          markBtn.textContent = "Mark My Attendance — Present";
+        }
+      });
+    }
 
     try {
       await loadAttendance();

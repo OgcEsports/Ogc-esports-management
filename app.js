@@ -34,11 +34,33 @@
   let teams = [];
 
   function showView(id) {
-  views.forEach(v => {
-    if (v === "loading-view") return;
-    $(v).classList.toggle("hidden", v !== id);
-  });
-}
+    views.forEach(v => {
+      if (v === "loading-view") return;
+      $(v).classList.toggle("hidden", v !== id);
+    });
+    const sp = $("loading-view");
+    if (sp) sp.classList.add("hidden");
+  }
+
+  function showStartupProblem(message) {
+    showView("welcome-view");
+    const old = $("startup-problem");
+    if (old) old.remove();
+    const msg = document.createElement("p");
+    msg.id = "startup-problem";
+    msg.className = "notice error";
+    msg.textContent = message;
+    $("welcome-view").appendChild(msg);
+  }
+
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(label + " timed out. Check your Supabase project (it may be paused) and internet.")), ms)
+      )
+    ]);
+  }
 
   function notice(message, type = "success") {
     const el = $("auth-message");
@@ -1551,18 +1573,22 @@ async function openDoubtBox(team) {
       return;
     }
 
+    if (!window.supabase || !window.supabase.createClient) {
+      showStartupProblem("Could not load the Supabase library. Check your internet connection and try again.");
+      return;
+    }
+
     supabase = window.supabase.createClient(
       window.OGC_CONFIG.SUPABASE_URL,
       window.OGC_CONFIG.SUPABASE_ANON_KEY
     );
 
     try {
-      await loadTeams();
-      await showWelcomeOrDashboard();
+      await withTimeout(loadTeams(), 10000, "Loading teams");
+      await withTimeout(showWelcomeOrDashboard(), 10000, "Checking login");
     } catch (e) {
-      showView("welcome-view");
       console.error("OGC startup error:", e);
-      alert("Website startup error: " + e.message);
+      showStartupProblem("Startup error: " + (e && e.message ? e.message : e));
     }
 
     supabase.auth.onAuthStateChange((_event, session) => {
@@ -1581,10 +1607,17 @@ if (splash) {
   }, 4000);
 }
 
+function safeInit() {
+  init().catch(e => {
+    console.error("OGC init crashed:", e);
+    showStartupProblem("App error: " + (e && e.message ? e.message : e));
+  });
+}
+
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
+  document.addEventListener("DOMContentLoaded", safeInit);
 } else {
-  init();
+  safeInit();
 }
 
 })();

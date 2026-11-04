@@ -2,10 +2,10 @@
   "use strict";
 
   const TEAM_NAMES = [
-    "OGC GALAXY", "OGC LDR", "OGC TITAN", "OGC BRB", "OGC NMS",
+    "OGC GALAXY", "OGC LDR", "OGC TITAN", "OGC ESPORTS 1", "OGC NMS",
     "OGC ROYALS", "OGC 4HL", "OGC AXOLOTLS", "OGC RANGERS",
     "OGC X GLADIATOR", "OGC HUSTLERS", "OGC ESPORTS", "OGC STARS",
-    "OGC ESPORTS 2", "OGC ESPORTS 3"
+    "OGC APEX", "OGC NGU"
   ];
 
   const MODULES = [
@@ -14,7 +14,8 @@
     ["▤", "LOBBY OS", "Lobby operating standards"],
     ["?", "DOUBT BOX", "Questions and answers"],
     ["▦", "TOURNAMENT SCHEDULES", "Tournament dates and details"],
-    ["◴", "UPCOMING SESSIONS", "Planned sessions and reviews"]
+    ["◴", "UPCOMING SESSIONS", "Planned sessions and reviews"],
+    ["☰", "PLAYER DETAILS", "Player profiles and contact details"]
   ];
 
   const $ = (id) => document.getElementById(id);
@@ -42,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b8";
+  const APP_BUILD = "b13";
 
   function resetSavedLogin() {
     try {
@@ -227,9 +228,12 @@
   }
 
   function moduleCards(teamId) {
-    const isManager = currentProfile && currentProfile.account_type === "member";
+    const canSeePlayers =
+      currentProfile &&
+      (currentProfile.account_type === "owner" ||
+       currentProfile.account_type === "member");
     const visibleModules = MODULES.map((m, i) => ({m, i})).filter(({m}) =>
-      !isManager || !["DRILLS", "LOBBY OS", "DOUBT BOX"].includes(m[1])
+      canSeePlayers || m[1] !== "PLAYER DETAILS"
     );
     return `<div class="module-grid">${visibleModules.map(({m, i}) => `
       <button type="button"
@@ -821,6 +825,82 @@ async function openEvents(team, eventType) {
   await loadEvents();
 }
 
+async function openPlayerDetails(team) {
+  const accountType = currentProfile?.account_type;
+  if (accountType !== "owner" && accountType !== "member") return;
+
+  const old = $("player-details-panel");
+  if (old) old.remove();
+
+  const panel = document.createElement("section");
+  panel.id = "player-details-panel";
+  panel.className = "content-card";
+  panel.style.marginTop = "18px";
+
+  panel.innerHTML = `
+    <div class="section-head">
+      <h2>PLAYER DETAILS — ${escapeHtml(team.name)}</h2>
+      <button type="button" class="text-btn" id="player-details-close">Close</button>
+    </div>
+    <div id="player-details-list" class="tiny muted">Loading players...</div>
+  `;
+
+  $("dashboard-content").appendChild(panel);
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("player-details-close").onclick = () => panel.remove();
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,full_name,ign,ff_uid,player_role,birth_date,phone,email,status,created_at")
+    .eq("team_id", team.id)
+    .eq("account_type", "player")
+    .order("full_name");
+
+  if (error) {
+    $("player-details-list").textContent =
+      "Could not load players: " + error.message;
+    return;
+  }
+
+  const players = data || [];
+
+  if (!players.length) {
+    $("player-details-list").textContent = "No players in this team yet.";
+    return;
+  }
+
+  const field = (label, value) => `
+    <div style="min-width:140px">
+      <div class="tiny muted">${label}</div>
+      <div>${escapeHtml(value || "—")}</div>
+    </div>`;
+
+  $("player-details-list").innerHTML =
+    `<p class="tiny muted">${players.length} player${players.length === 1 ? "" : "s"}</p>` +
+    players.map(p => `
+      <article class="content-card" style="margin:10px 0">
+        <h3 style="margin:0 0 10px">
+          ${escapeHtml(p.ign || p.full_name)}
+          <span class="tag" style="margin-left:8px">${escapeHtml((p.status || "").toUpperCase())}</span>
+        </h3>
+        <div style="display:flex;flex-wrap:wrap;gap:14px 28px">
+          ${field("Full name", p.full_name)}
+          ${field("In-game name", p.ign)}
+          ${field("Free Fire UID", p.ff_uid)}
+          ${field("Role", p.player_role)}
+          ${field("Birthdate", p.birth_date
+            ? new Date(p.birth_date).toLocaleDateString("en-IN")
+            : "")}
+          ${field("Phone", p.phone)}
+          ${field("Email", p.email)}
+          ${field("Joined", p.created_at
+            ? new Date(p.created_at).toLocaleDateString("en-IN")
+            : "")}
+        </div>
+      </article>
+    `).join("");
+}
+
 async function openDoubtBox(team) {
   const isOwner = currentProfile?.account_type === "owner";
   const isMember = currentProfile?.account_type === "member";
@@ -840,7 +920,7 @@ async function openDoubtBox(team) {
     </div>
 
     ${isOwner || isMember ? `
-      <p class="muted">Review questions submitted by players.</p>
+      <p class="muted">Review and answer questions submitted by players.</p>
     ` : `
       <form id="doubt-form" style="display:grid;gap:12px;max-width:650px">
         <label>Your question *
@@ -897,6 +977,19 @@ async function openDoubtBox(team) {
 
     const rendered = [];
 
+    // Look up who asked each question (owner and members only).
+    const askerById = new Map();
+    if (isOwner || isMember) {
+      const askerIds = [...new Set(items.map(x => x.user_id))];
+      if (askerIds.length) {
+        const { data: askers } = await supabase
+          .from("profiles")
+          .select("id,full_name,ign,player_role")
+          .in("id", askerIds);
+        (askers || []).forEach(a => askerById.set(a.id, a));
+      }
+    }
+
     for (const item of items) {
       const links = [];
 
@@ -914,6 +1007,13 @@ async function openDoubtBox(team) {
 
       rendered.push(`
         <article class="content-card" style="margin:10px 0">
+          ${(isOwner || isMember) ? (() => {
+            const a = askerById.get(item.user_id);
+            const label = a
+              ? (a.ign || a.full_name) + (a.ign && a.full_name ? " (" + a.full_name + ")" : "")
+              : "Unknown player";
+            return `<p style="margin:0 0 4px"><strong>${escapeHtml(label)}</strong>${a && a.player_role ? ` <span class="tiny muted">· ${escapeHtml(a.player_role)}</span>` : ""}</p>`;
+          })() : ""}
           <p class="tiny muted">${escapeHtml(new Date(item.created_at).toLocaleString("en-IN"))}</p>
           <h3>Question</h3>
           <p style="white-space:pre-wrap">${escapeHtml(item.question)}</p>
@@ -922,14 +1022,14 @@ async function openDoubtBox(team) {
 
           ${item.owner_response ? `
             <div style="border-left:3px solid #e63946;padding:10px;margin-top:10px">
-              <strong>Owner response</strong>
+              <strong>Response</strong>
               <p style="white-space:pre-wrap">${escapeHtml(item.owner_response)}</p>
             </div>
           ` : ""}
 
-          ${isOwner ? `
+          ${(isOwner || isMember) ? `
             <form data-doubt-reply="${item.id}" style="display:grid;gap:8px;margin-top:12px">
-              <label>Owner response
+              <label>Your response
                 <textarea name="response" required maxlength="4000" rows="3"
                   placeholder="Write your answer..."
                   style="display:block;width:100%;margin-top:6px">${escapeHtml(item.owner_response || "")}</textarea>
@@ -943,7 +1043,7 @@ async function openDoubtBox(team) {
 
     $("doubt-list").innerHTML = rendered.join("");
 
-    if (isOwner) {
+    if (isOwner || isMember) {
       $("doubt-list").querySelectorAll("[data-doubt-reply]").forEach(form => {
         form.onsubmit = async event => {
           event.preventDefault();
@@ -1066,6 +1166,7 @@ async function openDoubtBox(team) {
     try {
       if (module[1] === "ATTENDANCE") return await openAttendance(team);
       if (module[1] === "DRILLS" || module[1] === "LOBBY OS") return await openSubmission(team, module[1]);
+      if (module[1] === "PLAYER DETAILS") return await openPlayerDetails(team);
       if (module[1] === "DOUBT BOX") return await openDoubtBox(team);
       if (module[1] === "TOURNAMENT SCHEDULES") return await openEvents(team, "TOURNAMENT");
       if (module[1] === "UPCOMING SESSIONS") return await openEvents(team, "SESSION");

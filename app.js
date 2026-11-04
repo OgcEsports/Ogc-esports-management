@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b14";
+  const APP_BUILD = "b15";
 
   function resetSavedLogin() {
     try {
@@ -547,8 +547,11 @@ async function openSubmission(team, kind) {
       return;
     }
 
-    if (file.size > 25 * 1024 * 1024) {
-      status.textContent = "File must be 25 MB or smaller.";
+    const maxMb = isDrill ? 50 : 25;
+    if (file.size > maxMb * 1024 * 1024) {
+      status.textContent =
+        "File is " + (file.size / 1024 / 1024).toFixed(1) + " MB. The limit is " +
+        maxMb + " MB. Trim or compress the video and try again.";
       return;
     }
 

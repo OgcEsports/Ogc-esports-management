@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b13";
+  const APP_BUILD = "b14";
 
   function resetSavedLogin() {
     try {
@@ -508,6 +508,9 @@ async function openSubmission(team, kind) {
 
         if (!signError && signed?.signedUrl) {
           proofLink = `<a href="${escapeHtml(signed.signedUrl)}" target="_blank" rel="noopener">Open proof</a>`;
+        } else {
+          console.error("Proof link error:", signError);
+          proofLink = `<span class="tiny muted">Proof unavailable${signError?.message ? " (" + escapeHtml(signError.message) + ")" : ""}</span>`;
         }
       }
 

@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b17";
+  const APP_BUILD = "b18";
 
   function resetSavedLogin() {
     try {
@@ -1185,7 +1185,12 @@ async function openDoubtBox(team) {
   }
   // ---------- Automatic analytics (built from real attendance + submissions) ----------
   const IST_TZ = "Asia/Kolkata";
-  const C_RED = "#ff2d4d", C_BLUE = "#4da3ff", C_GREEN = "#3ecf8e";
+  const C_RED = "#ff2d4d", C_BLUE = "#4da3ff", C_GREEN = "#3ecf8e", C_GRID = "#2a2a33", C_OFF = "#23232b";
+  const RANGES = [7, 14, 30, 90];
+  const NO_DATA = "No activity yet. This fills in automatically as players mark attendance and upload drills and lobby OS.";
+  let analyticsRange = 30;
+  let analyticsTeam = "all";
+  let analyticsCache = null;
 
   function istKey(d) {
     return new Date(d).toLocaleDateString("en-CA", { timeZone: IST_TZ });
@@ -1208,9 +1213,19 @@ async function openDoubtBox(team) {
     );
   }
 
+  function keyAgo(n) {
+    const d = new Date(istKey(new Date()) + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() - n);
+    return d.toISOString().slice(0, 10);
+  }
+
   function shortDate(key) {
     const p = key.split("-");
     return Number(p[2]) + "/" + Number(p[1]);
+  }
+
+  function fullDate(key) {
+    return key.split("-").reverse().join("/");
   }
 
   // Supabase returns at most 1000 rows per request, so read in pages.
@@ -1225,6 +1240,7 @@ async function openDoubtBox(team) {
     return rows;
   }
 
+  // ----- chart helpers (plain SVG/HTML, no libraries) -----
   function legend(items) {
     return `<div class="tiny muted" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">${
       items.map(i =>
@@ -1232,41 +1248,130 @@ async function openDoubtBox(team) {
       ).join("")}</div>`;
   }
 
-  function barChart(labels, series, opts = {}) {
-    const H = 180, L = 32, R = 6, T = 10, B = 26;
-    const scroll = labels.length > 12;
-    const W = scroll ? L + R + labels.length * 26 : 320;
+  function geom(n) {
+    const H = 180, L = 32, R = 8, T = 10, B = 26;
+    const scroll = n > 12;
+    const W = scroll ? L + R + n * 26 : 320;
     const plotW = W - L - R, plotH = H - T - B;
-    const peak = Math.max(1, ...series.flatMap(s => s.values));
-    const maxV = opts.max || Math.max(4, Math.ceil(peak / 4) * 4);
-    const unit = opts.unit || "";
-    const groupW = plotW / labels.length;
-    const barW = (groupW * 0.72) / series.length;
-    const step = scroll ? 1 : (labels.length > 8 ? 2 : 1);
+    return { H, L, R, T, B, W, scroll, plotW, plotH, groupW: plotW / n };
+  }
+
+  function axes(gm, maxV, unit, labels) {
     let g = "";
-
     [0, 0.5, 1].forEach(f => {
-      const y = T + plotH - f * plotH;
-      g += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#2a2a33" stroke-width="1"/>` +
-           `<text x="${L - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9aa0a6">${Math.round(f * maxV)}${unit}</text>`;
+      const y = gm.T + gm.plotH - f * gm.plotH;
+      g += `<line x1="${gm.L}" x2="${gm.W - gm.R}" y1="${y}" y2="${y}" stroke="${C_GRID}" stroke-width="1"/>` +
+           `<text x="${gm.L - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9aa0a6">${Math.round(f * maxV)}${unit}</text>`;
     });
-
+    const step = gm.scroll ? 1 : (labels.length > 8 ? 2 : 1);
     labels.forEach((lab, i) => {
-      series.forEach((s, j) => {
-        const v = s.values[i] || 0;
-        const h = Math.max(0, Math.min(1, v / maxV)) * plotH;
-        const x = L + i * groupW + groupW * 0.14 + j * barW;
-        if (h > 0) {
-          g += `<rect x="${x.toFixed(1)}" y="${(T + plotH - h).toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${s.color}"/>`;
-        }
-      });
       if ((labels.length - 1 - i) % step === 0) {
-        g += `<text x="${(L + i * groupW + groupW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(lab)}</text>`;
+        g += `<text x="${(gm.L + i * gm.groupW + gm.groupW / 2).toFixed(1)}" y="${gm.H - 8}" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(lab)}</text>`;
       }
     });
+    return g;
+  }
 
-    const svg = `<svg viewBox="0 0 ${W} ${H}" ${scroll ? `width="${W}" style="display:block"` : 'width="100%"'} role="img" aria-label="${escapeHtml(opts.label || "Chart")}">${g}</svg>`;
-    return scroll ? `<div class="chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">${svg}</div>` : svg;
+  function svgWrap(gm, g, label) {
+    const svg = `<svg viewBox="0 0 ${gm.W} ${gm.H}" ${gm.scroll ? `width="${gm.W}" style="display:block"` : 'width="100%"'} role="img" aria-label="${escapeHtml(label || "Chart")}">${g}</svg>`;
+    return gm.scroll
+      ? `<div class="chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">${svg}</div>`
+      : svg;
+  }
+
+  // Bars: grouped by default, stacked with opts.stack
+  function barChart(labels, series, opts = {}) {
+    const gm = geom(labels.length);
+    const stack = !!opts.stack;
+    const peak = stack
+      ? Math.max(1, ...labels.map((_, i) => series.reduce((s, x) => s + (x.values[i] || 0), 0)))
+      : Math.max(1, ...series.flatMap(s => s.values));
+    const maxV = opts.max || Math.max(4, Math.ceil(peak / 4) * 4);
+    let g = axes(gm, maxV, opts.unit || "", labels);
+    const barW = stack ? gm.groupW * 0.72 : (gm.groupW * 0.72) / series.length;
+
+    labels.forEach((_, i) => {
+      let base = gm.T + gm.plotH;
+      series.forEach((s, j) => {
+        const v = s.values[i] || 0;
+        const h = Math.max(0, Math.min(1, v / maxV)) * gm.plotH;
+        if (h <= 0) return;
+        const x = gm.L + i * gm.groupW + gm.groupW * 0.14 + (stack ? 0 : j * barW);
+        const y = stack ? base - h : gm.T + gm.plotH - h;
+        if (stack) base -= h;
+        g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${s.color}"/>`;
+      });
+    });
+    return svgWrap(gm, g, opts.label);
+  }
+
+  // Line with soft area fill
+  function lineChart(labels, series, opts = {}) {
+    const gm = geom(labels.length);
+    const peak = Math.max(1, ...series.flatMap(s => s.values));
+    const maxV = opts.max || Math.max(4, Math.ceil(peak / 4) * 4);
+    let g = axes(gm, maxV, opts.unit || "", labels);
+    const base = gm.T + gm.plotH;
+
+    series.forEach(s => {
+      const pts = s.values.map((v, i) => [
+        gm.L + i * gm.groupW + gm.groupW / 2,
+        base - Math.max(0, Math.min(1, (v || 0) / maxV)) * gm.plotH
+      ]);
+      const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+      g += `<path d="${line} L${pts[pts.length - 1][0].toFixed(1)} ${base} L${pts[0][0].toFixed(1)} ${base} Z" fill="${s.color}" opacity="0.15"/>`;
+      g += `<path d="${line}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      if (pts.length <= 31) {
+        pts.forEach(p => { g += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${s.color}"/>`; });
+      }
+    });
+    return svgWrap(gm, g, opts.label);
+  }
+
+  // Donut with legend
+  function donut(parts, centerText, centerSub) {
+    const total = parts.reduce((s, p) => s + p.value, 0);
+    if (!total) return empty(NO_DATA);
+    const R = 42, C = 2 * Math.PI * R;
+    let acc = 0;
+    const arcs = parts.filter(p => p.value > 0).map(p => {
+      const len = p.value / total * C;
+      const el = `<circle r="${R}" cx="60" cy="60" fill="none" stroke="${p.color}" stroke-width="16" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 60 60)"/>`;
+      acc += len;
+      return el;
+    }).join("");
+    const key = parts.map(p => `
+      <div style="margin:5px 0;font-size:14px">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${p.color};margin-right:7px"></span>${escapeHtml(p.label)}
+        <strong style="margin-left:6px">${p.value}</strong>
+        <span class="tiny muted">(${Math.round(p.value / total * 100)}%)</span>
+      </div>`).join("");
+    return `<div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+      <svg width="120" height="120" viewBox="0 0 120 120" role="img" aria-label="Share chart">
+        <circle r="${R}" cx="60" cy="60" fill="none" stroke="${C_OFF}" stroke-width="16"/>
+        ${arcs}
+        <text x="60" y="60" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">${escapeHtml(centerText)}</text>
+        <text x="60" y="75" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(centerSub || "")}</text>
+      </svg>
+      <div>${key}</div></div>`;
+  }
+
+  // Player x day attendance grid
+  function heatmap(players, days, presentMap) {
+    if (!players.length) return empty("No approved players in this team yet.");
+    const cell = bg => `<span style="flex:0 0 14px;width:14px;height:14px;border-radius:3px;background:${bg}"></span>`;
+    const head = `<div style="display:flex;gap:3px;margin-left:118px;height:12px">${
+      days.map((d, i) =>
+        `<span style="flex:0 0 14px;width:14px;font-size:8px;color:#9aa0a6;white-space:nowrap;overflow:visible">${(days.length - 1 - i) % 7 === 0 ? shortDate(d) : ""}</span>`
+      ).join("")}</div>`;
+    const rows = players.map(p => {
+      const set = presentMap.get(p.id) || new Set();
+      return `<div style="display:flex;align-items:center;gap:3px;margin:3px 0">
+        <span style="flex:0 0 115px;width:115px;position:sticky;left:0;background:#0c0c12;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;z-index:1">${escapeHtml(p.ign || p.full_name || "Player")}</span>
+        ${days.map(d => cell(set.has(d) ? C_GREEN : C_OFF)).join("")}</div>`;
+    }).join("");
+    return legend([{ name: "Present", color: C_GREEN }, { name: "Absent", color: C_OFF }]) +
+      `<div class="chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">${head}${rows}</div>`;
   }
 
   function rankBars(items, unit = "") {
@@ -1277,7 +1382,7 @@ async function openDoubtBox(team) {
           <span>${escapeHtml(i.label)}${i.sub ? ` <span class="tiny muted">· ${escapeHtml(i.sub)}</span>` : ""}</span>
           <strong>${i.value}${unit}</strong>
         </div>
-        <div style="height:6px;border-radius:4px;background:#23232b;margin-top:4px">
+        <div style="height:6px;border-radius:4px;background:${C_OFF};margin-top:4px">
           <div style="height:6px;border-radius:4px;width:${(i.value / max * 100).toFixed(0)}%;background:${C_RED}"></div>
         </div>
       </div>`).join("");
@@ -1287,11 +1392,33 @@ async function openDoubtBox(team) {
     return `<div class="content-card"><h3>${title}</h3>${body}</div>`;
   }
 
-  const NO_DATA = "No activity yet. This fills in automatically as players mark attendance and upload drills and lobby OS.";
-  const RANGES = [7, 14, 30, 90];
-  let analyticsRange = 30;
-  let analyticsCache = null;
+  function dailyTable(rows, cols) {
+    return `<div style="overflow:auto;max-height:380px;border:1px solid ${C_GRID};border-radius:10px">
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr>${cols.map(c => `<th style="text-align:left;padding:9px;position:sticky;top:0;background:#14141a">${c}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${r.map(c => `<td style="padding:9px;border-top:1px solid ${C_GRID}">${c}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>`;
+  }
 
+  function rangeBar(active) {
+    return `<span class="tiny muted">Show:</span>
+      ${RANGES.map(n => `<button type="button" data-range="${n}" class="secondary-btn small" style="${n === active ? "border-color:" + C_RED + ";color:" + C_RED + ";" : ""}">${n} days</button>`).join("")}`;
+  }
+
+  // Last 8 weeks, submissions + attendance stacked
+  function weeklyChart(subs, present) {
+    const order = [7, 6, 5, 4, 3, 2, 1, 0];
+    const inWeek = (key, w) => { const a = daysAgo(key); return a >= w * 7 && a < (w + 1) * 7; };
+    const subW = order.map(w => subs.filter(s => inWeek(s.day, w)).length);
+    const attW = order.map(w => present.filter(r => inWeek(r.attendance_date, w)).length);
+    if (subW.every(v => v === 0) && attW.every(v => v === 0)) return empty(NO_DATA);
+    return legend([{ name: "Drills + lobby OS", color: C_RED }, { name: "Attendance marks", color: C_GREEN }]) +
+      barChart(order.map(w => shortDate(keyAgo(w * 7 + 6))),
+        [{ values: subW, color: C_RED }, { values: attW, color: C_GREEN }],
+        { stack: true, label: "Weekly activity" });
+  }
+
+  // ----- data loading (cached for a minute so range / team switches are instant) -----
   async function loadAnalyticsData(scope) {
     if (analyticsCache && analyticsCache.scope === scope && Date.now() - analyticsCache.at < 60000) {
       return analyticsCache.data;
@@ -1319,14 +1446,20 @@ async function openDoubtBox(team) {
       })
     ]);
 
-    const data = { attRows, subRows, teamRows: [], totalPlayers: 0, open: [] };
+    const data = { attRows, subRows, teamRows: [], players: [], counts: new Map(), open: [] };
 
     if (!me) {
       const { data: teamRows } = await supabase.from("teams").select("id,name");
       data.teamRows = teamRows || [];
       try {
+        data.players = await fetchAll(() =>
+          supabase.from("profiles")
+            .select("id,full_name,ign,team_id")
+            .eq("account_type", "player").eq("status", "approved").order("id"));
+      } catch (_) {}
+      try {
         const { data: counts } = await supabase.rpc("get_team_player_counts");
-        data.totalPlayers = (counts || []).reduce((s, r) => s + Number(r.approved_count || 0), 0);
+        (counts || []).forEach(r => data.counts.set(r.team_id, Number(r.approved_count || 0)));
       } catch (_) {}
       try {
         data.open = await fetchAll(() =>
@@ -1338,28 +1471,207 @@ async function openDoubtBox(team) {
     return data;
   }
 
-  function rangeBar(active) {
-    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px" id="range-bar">
-      <span class="tiny muted" style="align-self:center">Show:</span>
-      ${RANGES.map(n => `<button type="button" data-range="${n}" class="secondary-btn small" style="${n === active ? "border-color:" + C_RED + ";color:" + C_RED + ";" : ""}">${n} days</button>`).join("")}
-    </div>`;
+  // ----- numbers for one team over the chosen days -----
+  function teamMetrics(teamId, ctx) {
+    const { days, present, subs, players, counts } = ctx;
+    const pl = players.filter(p => p.team_id === teamId);
+    const n = pl.length || counts.get(teamId) || 0;
+    const pres = present.filter(r => r.team_id === teamId);
+    const sb = subs.filter(s => s.team_id === teamId);
+    const presentByDay = days.map(d => new Set(
+      pres.filter(r => r.attendance_date === d).map(r => r.player_id)).size);
+    const drillsByDay = days.map(d => sb.filter(s => s.day === d && s.kind === "DRILLS").length);
+    const osByDay = days.map(d => sb.filter(s => s.day === d && s.kind === "LOBBY OS").length);
+    const pct = presentByDay.map(v => (n ? Math.min(100, Math.round(v / n * 100)) : 0));
+    const presentDays = presentByDay.reduce((a, b) => a + b, 0);
+    const drills = drillsByDay.reduce((a, b) => a + b, 0);
+    const os = osByDay.reduce((a, b) => a + b, 0);
+    const attRange = n ? Math.min(100, Math.round(presentDays / (n * days.length) * 100)) : 0;
+    return { pl, n, pres, sb, presentByDay, drillsByDay, osByDay, pct, presentDays, drills, os, attRange, score: drills + os + presentDays };
   }
 
-  function dailyTable(rows, cols) {
-    return `<div style="overflow:auto;max-height:380px;border:1px solid #2a2a33;border-radius:10px">
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
-        <thead><tr>${cols.map(c => `<th style="text-align:left;padding:9px;position:sticky;top:0;background:#14141a">${c}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map(r => `<tr>${r.map(c => `<td style="padding:9px;border-top:1px solid #2a2a33">${c}</td>`).join("")}</tr>`).join("")}</tbody>
-      </table></div>`;
+  // ----- one team, in detail -----
+  function teamView(team, ctx, data) {
+    const { days } = ctx;
+    const m = teamMetrics(team.id, ctx);
+    const labels = days.map(shortDate);
+    const last = days.length - 1;
+    const dayset = new Set(days);
+    const open = Array.isArray(data.open) ? data.open.filter(d => d.team_id === team.id).length : 0;
+
+    const board = m.pl.map(p => {
+      const d1 = m.sb.filter(s => s.user_id === p.id && s.kind === "DRILLS" && dayset.has(s.day)).length;
+      const o1 = m.sb.filter(s => s.user_id === p.id && s.kind === "LOBBY OS" && dayset.has(s.day)).length;
+      const dates = new Set(m.pres.filter(r => r.player_id === p.id && dayset.has(r.attendance_date)).map(r => r.attendance_date));
+      return { p, d1, o1, dates, score: d1 + o1 + dates.size };
+    }).sort((a, b) => b.score - a.score);
+    const presentMap = new Map(board.map(x => [x.p.id, x.dates]));
+
+    const attChart = m.presentDays === 0
+      ? empty(NO_DATA)
+      : lineChart(labels, [{ values: m.pct, color: C_GREEN }], { max: 100, unit: "%", label: "Daily attendance percentage" });
+
+    const subsChart = (m.drills + m.os) === 0
+      ? empty(NO_DATA)
+      : legend([{ name: "Drills", color: C_RED }, { name: "Lobby OS", color: C_BLUE }]) +
+        barChart(labels, [{ values: m.drillsByDay, color: C_RED }, { values: m.osByDay, color: C_BLUE }],
+          { stack: true, label: "Daily drill and lobby OS submissions" });
+
+    const totalSlots = m.n * days.length;
+    const absent = Math.max(0, totalSlots - m.presentDays);
+
+    const rows = days.map((d, i) => [
+      fullDate(d),
+      m.presentByDay[i] + " / " + m.n + " (" + m.pct[i] + "%)",
+      String(m.drillsByDay[i]),
+      String(m.osByDay[i])
+    ]).reverse();
+
+    return `
+      <div class="stats-grid">
+        ${stat("PLAYERS", String(m.n), "Approved in this team")}
+        ${stat("PRESENT TODAY", m.presentByDay[last] + "/" + m.n, "Marked present")}
+        ${stat("ATTENDANCE", m.attRange + "%", "Last " + days.length + " days")}
+        ${stat("DRILLS", String(m.drills), "Last " + days.length + " days")}
+        ${stat("LOBBY OS", String(m.os), "Last " + days.length + " days")}
+        ${stat("OPEN DOUBTS", String(open), "Waiting for a reply")}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Attendance trend", attChart)}
+        ${aCard("Daily submissions", subsChart)}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Submission mix", donut(
+          [{ label: "Drills", value: m.drills, color: C_RED }, { label: "Lobby OS", value: m.os, color: C_BLUE }],
+          String(m.drills + m.os), "uploads"))}
+        ${aCard("Attendance split", totalSlots === 0 ? empty(NO_DATA) : donut(
+          [{ label: "Present", value: m.presentDays, color: C_GREEN }, { label: "Absent", value: absent, color: C_OFF }],
+          m.attRange + "%", "present"))}
+      </div>
+      <div style="margin-top:14px">${aCard("Weekly activity (8 weeks)", weeklyChart(m.sb, m.pres))}</div>
+      <div class="section-head"><h2>PLAYERS</h2><p>Each player, last ${days.length} days</p></div>
+      <div class="two-col">
+        ${aCard("Player ranking", board.length
+          ? rankBars(board.map(x => ({
+              label: x.p.ign || x.p.full_name || "Player",
+              sub: "D " + x.d1 + " · OS " + x.o1 + " · " + x.dates.size + " days present",
+              value: x.score })))
+          : empty("No approved players in this team yet."))}
+        ${aCard("Attendance by player", heatmap(board.map(x => x.p), days, presentMap))}
+      </div>
+      <div class="section-head"><h2>DAILY RECORD</h2><p>${escapeHtml(team.name)} · every day, newest first</p></div>
+      ${dailyTable(rows, ["Date", "Players present", "Drills", "Lobby OS"])}`;
+  }
+
+  // ----- every team side by side (not combined) -----
+  function overview(teams, ctx, data) {
+    const { days } = ctx;
+    const last = days.length - 1;
+    const metrics = teams.map(t => ({ t, m: teamMetrics(t.id, ctx) }));
+    const byScore = [...metrics].sort((a, b) => b.m.score - a.m.score);
+    const byAtt = [...metrics].sort((a, b) => b.m.attRange - a.m.attRange);
+    const activeTeams = metrics.filter(x => x.m.score > 0).length;
+    const totalPlayers = metrics.reduce((s, x) => s + x.m.n, 0);
+
+    const doubtItems = Array.isArray(data.open)
+      ? teams.map(t => ({ label: t.name, value: data.open.filter(d => d.team_id === t.id).length }))
+          .filter(x => x.value > 0).sort((a, b) => b.value - a.value)
+      : null;
+    const doubtBody = doubtItems === null
+      ? empty("Unanswered doubts could not be loaded.")
+      : doubtItems.length
+        ? `<p style="font-size:28px;margin:4px 0"><strong>${doubtItems.reduce((s, x) => s + x.value, 0)}</strong> <span class="tiny muted">waiting for a reply</span></p>${rankBars(doubtItems.slice(0, 8))}`
+        : empty("No unanswered doubts. Everything is replied to.");
+
+    const rows = metrics.map(({ t, m }) => [
+      `<button type="button" data-team-pick="${t.id}" class="text-btn" style="padding:0;text-align:left">${escapeHtml(t.name)} →</button>`,
+      String(m.n),
+      m.presentByDay[last] + "/" + m.n,
+      m.attRange + "%",
+      String(m.drills),
+      String(m.os)
+    ]);
+
+    return `
+      <div class="stats-grid">
+        ${stat("TEAMS", String(teams.length), "In the organization")}
+        ${stat("APPROVED PLAYERS", String(totalPlayers), "Across all teams")}
+        ${stat("TEAMS ACTIVE", String(activeTeams), "With activity, last " + days.length + " days")}
+      </div>
+      <p class="tiny muted" style="margin:12px 0 0">Each team is shown on its own below. Pick a team above, or tap a name in the table, to see its full records.</p>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Activity by team", byScore.some(x => x.m.score > 0)
+          ? `<p class="tiny muted">Drills + lobby OS + attendance, last ${days.length} days</p>` +
+            rankBars(byScore.map(x => ({ label: x.t.name, sub: x.m.n + " players", value: x.m.score })))
+          : empty(NO_DATA))}
+        ${aCard("Attendance by team", byAtt.some(x => x.m.attRange > 0)
+          ? `<p class="tiny muted">Average share of players present, last ${days.length} days</p>` +
+            rankBars(byAtt.map(x => ({ label: x.t.name, value: x.m.attRange })), "%")
+          : empty(NO_DATA))}
+      </div>
+      <div style="margin-top:14px">${aCard("Pending reviews", doubtBody)}</div>
+      <div class="section-head"><h2>TEAM COMPARISON</h2><p>One row per team</p></div>
+      ${dailyTable(rows, ["Team", "Players", "Present today", "Attendance", "Drills", "Lobby OS"])}`;
+  }
+
+  // ----- a player's own records -----
+  function playerView(ctx) {
+    const { days, present, subs } = ctx;
+    const labels = days.map(shortDate);
+    const presentSet = new Set(present.map(r => r.attendance_date));
+    const drillsByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "DRILLS").length);
+    const osByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "LOBBY OS").length);
+    const presentDays = days.filter(d => presentSet.has(d)).length;
+    const drills = drillsByDay.reduce((a, b) => a + b, 0);
+    const os = osByDay.reduce((a, b) => a + b, 0);
+    const pctAtt = Math.round(presentDays / Math.max(1, days.length) * 100);
+    const todayKey = days[days.length - 1];
+
+    const subsChart = (drills + os) === 0
+      ? empty(NO_DATA)
+      : legend([{ name: "Drills", color: C_RED }, { name: "Lobby OS", color: C_BLUE }]) +
+        barChart(labels, [{ values: drillsByDay, color: C_RED }, { values: osByDay, color: C_BLUE }],
+          { stack: true, label: "Your daily submissions" });
+
+    const me = { id: "me", ign: "You" };
+    const rows = days.map((d, i) => [
+      fullDate(d),
+      presentSet.has(d) ? "Present" : (d === todayKey ? "Not marked yet" : "Absent"),
+      String(drillsByDay[i]),
+      String(osByDay[i])
+    ]).reverse();
+
+    return `
+      <div class="section-head"><h2>YOUR STATS</h2><p>Updates automatically</p></div>
+      <div class="stats-grid">
+        ${stat("PRESENT", presentDays + "/" + days.length, "Days in range")}
+        ${stat("ATTENDANCE", pctAtt + "%", "In range")}
+        ${stat("DRILLS", String(drills), "In range")}
+        ${stat("LOBBY OS", String(os), "In range")}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Daily submissions", subsChart)}
+        ${aCard("Submission mix", donut(
+          [{ label: "Drills", value: drills, color: C_RED }, { label: "Lobby OS", value: os, color: C_BLUE }],
+          String(drills + os), "uploads"))}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Attendance calendar", heatmap([me], days, new Map([["me", presentSet]])))}
+        ${aCard("Attendance split", donut(
+          [{ label: "Present", value: presentDays, color: C_GREEN }, { label: "Absent", value: Math.max(0, days.length - presentDays), color: C_OFF }],
+          pctAtt + "%", "present"))}
+      </div>
+      <div style="margin-top:14px">${aCard("Weekly activity (8 weeks)", weeklyChart(subs, present))}</div>
+      <div class="section-head"><h2>DAILY RECORD</h2><p>Every day, newest first</p></div>
+      ${dailyTable(rows, ["Date", "Attendance", "Drills", "Lobby OS"])}`;
   }
 
   async function buildAnalytics(scope) {
     const me = scope === "me";
-    const range = analyticsRange;
     const data = await loadAnalyticsData(scope);
-    let days = lastDays(range);
+    let days = lastDays(analyticsRange);
 
-    // For a player, do not show days from before the account existed.
+    // Players: skip days from before the account existed
     if (me && currentProfile && currentProfile.created_at) {
       const joined = istKey(currentProfile.created_at);
       const kept = days.filter(d => d >= joined);
@@ -1368,162 +1680,29 @@ async function openDoubtBox(team) {
 
     const present = data.attRows.filter(r => String(r.status).toLowerCase() === "present");
     const subs = data.subRows.map(r => ({ ...r, day: istKey(r.created_at) }));
-    const teamName = new Map(data.teamRows.map(t => [t.id, t.name]));
+    const ctx = { days, present, subs, players: data.players || [], counts: data.counts || new Map() };
 
-    const drillsByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "DRILLS").length);
-    const osByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "LOBBY OS").length);
-    const presentByDay = days.map(d => new Set(
-      present.filter(r => r.attendance_date === d).map(r => r.player_id)
-    ).size);
-    const labels = days.map(shortDate);
-
-    const perfEmpty = drillsByDay.every(v => v === 0) && osByDay.every(v => v === 0);
-    const perfChart = perfEmpty
-      ? empty(NO_DATA)
-      : legend([{ name: "Drills", color: C_RED }, { name: "Lobby OS", color: C_BLUE }]) +
-        barChart(labels, [{ values: drillsByDay, color: C_RED }, { values: osByDay, color: C_BLUE }],
-          { label: "Daily drill and lobby OS submissions" });
-
-    const inLast7 = k => daysAgo(k) >= 0 && daysAgo(k) < 7;
-
-    // ---------- Player view ----------
     if (me) {
-      const presentDays = presentByDay.filter(v => v > 0).length;
-      const drillsN = drillsByDay.reduce((a, b) => a + b, 0);
-      const osN = osByDay.reduce((a, b) => a + b, 0);
-      const attPct = presentByDay.map(v => (v > 0 ? 100 : 0));
-
-      const weeks = [0, 1, 2, 3].map(w => {
-        const inWeek = k => { const a = daysAgo(k); return a >= (3 - w) * 7 && a < (4 - w) * 7; };
-        return subs.filter(s => inWeek(s.day)).length +
-               present.filter(r => inWeek(r.attendance_date)).length;
-      });
-      const weeksTotal = weeks.reduce((a, b) => a + b, 0);
-
-      const attBody = presentDays === 0 && data.attRows.length === 0
-        ? empty("Mark your attendance each day and it will appear here.")
-        : legend([{ name: "Present", color: C_GREEN }]) +
-          barChart(labels, [{ values: attPct, color: C_GREEN }],
-            { max: 100, unit: "%", label: "Your attendance" });
-
-      const rows = days.map((d, i) => [
-        escapeHtml(d.split("-").reverse().join("/")),
-        presentByDay[i] > 0 ? "Present" : (d === days[days.length - 1] ? "Not marked yet" : "Absent"),
-        String(drillsByDay[i]),
-        String(osByDay[i])
-      ]).reverse();
-
-      return `
-        <div class="section-head"><h2>YOUR STATS</h2><p>Updates automatically</p></div>
-        ${rangeBar(range)}
-        <div class="stats-grid">
-          ${stat("PRESENT", presentDays + "/" + days.length, "Days in range")}
-          ${stat("DRILLS", String(drillsN), "In range")}
-          ${stat("LOBBY OS", String(osN), "In range")}
-          ${stat("ATTENDANCE", Math.round(presentDays / Math.max(1, days.length) * 100) + "%", "In range")}
-        </div>
-        <div class="two-col" style="margin-top:14px">
-          ${aCard("Performance overview", perfChart)}
-          ${aCard("Attendance", attBody)}
-        </div>
-        <div style="margin-top:14px">${aCard("Your weekly activity",
-          weeksTotal === 0 ? empty(NO_DATA)
-            : barChart(["3 wks ago", "2 wks ago", "Last wk", "This wk"],
-                [{ values: weeks, color: C_RED }], { label: "Your weekly activity" }))}</div>
-        <div class="section-head"><h2>DAILY RECORD</h2><p>Every day, newest first</p></div>
-        ${dailyTable(rows, ["Date", "Attendance", "Drills", "Lobby OS"])}`;
+      return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px">${rangeBar(analyticsRange)}</div>` +
+        playerView(ctx);
     }
 
-    // ---------- Owner / member view (whole organization) ----------
-    const totalPlayers = data.totalPlayers || Math.max(1, ...presentByDay);
-    const attPct = presentByDay.map(v => Math.min(100, Math.round(v / totalPlayers * 100)));
-    const attBody = presentByDay.every(v => v === 0)
-      ? empty(NO_DATA)
-      : legend([{ name: "Players present (% of all approved players)", color: C_GREEN }]) +
-        barChart(labels, [{ values: attPct, color: C_GREEN }],
-          { max: 100, unit: "%", label: "Daily attendance percentage" });
+    const teams = [...data.teamRows].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    if (analyticsTeam !== "all" && !teams.some(t => t.id === analyticsTeam)) analyticsTeam = "all";
+    const team = teams.find(t => t.id === analyticsTeam);
 
-    const teamScore = new Map();
-    subs.filter(s => inLast7(s.day)).forEach(s =>
-      teamScore.set(s.team_id, (teamScore.get(s.team_id) || 0) + 1));
-    present.filter(r => inLast7(r.attendance_date)).forEach(r =>
-      teamScore.set(r.team_id, (teamScore.get(r.team_id) || 0) + 1));
-    const teamRank = [...teamScore.entries()]
-      .map(([id, value]) => ({ label: teamName.get(id) || "Team", value }))
-      .sort((a, b) => b.value - a.value);
-    const weeklyBody = teamRank.length
-      ? `<p class="tiny muted">Drills + lobby OS + attendance, last 7 days</p>${rankBars(teamRank)}`
-      : empty(NO_DATA);
-
-    let reviewsBody;
-    if (data.open === null) {
-      reviewsBody = empty("Unanswered doubts could not be loaded.");
-    } else if (!data.open.length) {
-      reviewsBody = empty("No unanswered doubts. Everything is replied to.");
-    } else {
-      const byTeam = new Map();
-      data.open.forEach(d => byTeam.set(d.team_id, (byTeam.get(d.team_id) || 0) + 1));
-      const top = [...byTeam.entries()]
-        .map(([id, value]) => ({ label: teamName.get(id) || "Team", value }))
-        .sort((a, b) => b.value - a.value).slice(0, 5);
-      reviewsBody = `<p style="font-size:28px;margin:4px 0"><strong>${data.open.length}</strong> <span class="tiny muted">unanswered doubt${data.open.length === 1 ? "" : "s"}</span></p>${rankBars(top)}`;
-    }
-
-    // Top active players within the chosen range
-    const dayset = new Set(days);
-    const playerScore = new Map();
-    subs.filter(s => dayset.has(s.day)).forEach(s =>
-      playerScore.set(s.user_id, (playerScore.get(s.user_id) || 0) + 1));
-    present.filter(r => dayset.has(r.attendance_date)).forEach(r =>
-      playerScore.set(r.player_id, (playerScore.get(r.player_id) || 0) + 1));
-    const topIds = [...playerScore.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-    let topBody = empty(NO_DATA);
-    if (topIds.length) {
-      const { data: people } = await supabase.from("profiles")
-        .select("id,full_name,ign,team_id").in("id", topIds.map(x => x[0]));
-      const pById = new Map((people || []).map(p => [p.id, p]));
-      topBody = `<p class="tiny muted">Attendance days + drill and lobby OS uploads, last ${days.length} days</p>` +
-        rankBars(topIds.map(([id, value]) => {
-          const p = pById.get(id);
-          return { label: p ? (p.ign || p.full_name) : "Player", sub: p ? (teamName.get(p.team_id) || "") : "", value };
-        }));
-    }
-
-    const subs7 = subs.filter(s => inLast7(s.day)).length;
-    const presentToday = presentByDay[presentByDay.length - 1];
-    const active7 = new Set([
-      ...subs.filter(s => inLast7(s.day)).map(s => s.user_id),
-      ...present.filter(r => inLast7(r.attendance_date)).map(r => r.player_id)
-    ]).size;
-
-    const rows = days.map((d, i) => [
-      escapeHtml(d.split("-").reverse().join("/")),
-      presentByDay[i] + " / " + totalPlayers + " (" + attPct[i] + "%)",
-      String(drillsByDay[i]),
-      String(osByDay[i])
-    ]).reverse();
+    const picker = `<select id="analytics-team" style="flex:1 1 200px;min-width:0;padding:10px 12px;border-radius:10px;border:1px solid ${C_GRID};background:#14141a;color:#fff;font-size:15px">
+      <option value="all">All teams — side by side</option>
+      ${teams.map(t => `<option value="${t.id}"${t.id === analyticsTeam ? " selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}
+    </select>`;
 
     return `
-      <div class="section-head"><h2>ORGANIZATION ANALYTICS</h2><p>Updates automatically</p></div>
-      ${rangeBar(range)}
-      <div class="stats-grid">
-        ${stat("PRESENT TODAY", String(presentToday), "of " + totalPlayers + " approved players")}
-        ${stat("SUBMISSIONS", String(subs7), "Drills + lobby OS, 7 days")}
-        ${stat("ACTIVE PLAYERS", String(active7), "Last 7 days")}
-        ${stat("TEAMS ACTIVE", String(teamRank.length), "With activity, 7 days")}
+      <div class="section-head"><h2>${team ? escapeHtml(team.name) + " ANALYTICS" : "TEAM ANALYTICS"}</h2><p>Updates automatically</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px">
+        ${picker}
       </div>
-      <div class="two-col" style="margin-top:14px">
-        ${aCard("Daily performance", perfChart)}
-        ${aCard("Attendance analysis", attBody)}
-      </div>
-      <div class="two-col" style="margin-top:14px">
-        ${aCard("Weekly team activity", weeklyBody)}
-        ${aCard("Pending reviews", reviewsBody)}
-      </div>
-      <div class="section-head"><h2>TOP ACTIVE PLAYERS</h2></div>
-      <div class="content-card">${topBody}</div>
-      <div class="section-head"><h2>DAILY RECORD</h2><p>Every day, newest first</p></div>
-      ${dailyTable(rows, ["Date", "Players present", "Drills", "Lobby OS"])}`;
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px">${rangeBar(analyticsRange)}</div>
+      ${team ? teamView(team, ctx, data) : overview(teams, ctx, data)}`;
   }
 
   async function fillAnalytics(scope) {
@@ -1535,12 +1714,16 @@ async function openDoubtBox(team) {
     try {
       slot.innerHTML = await buildAnalytics(scope);
       slot.querySelectorAll("[data-range]").forEach(b => {
+        b.onclick = () => { analyticsRange = Number(b.dataset.range); fillAnalytics(scope); };
+      });
+      const sel = $("analytics-team");
+      if (sel) sel.onchange = () => { analyticsTeam = sel.value; fillAnalytics(scope); };
+      slot.querySelectorAll("[data-team-pick]").forEach(b => {
         b.onclick = () => {
-          analyticsRange = Number(b.dataset.range);
-          fillAnalytics(scope);
+          analyticsTeam = b.dataset.teamPick;
+          fillAnalytics(scope).then(() => slot.scrollIntoView({ behavior: "smooth", block: "start" }));
         };
       });
-      // Show the most recent days first on the scrollable charts
       slot.querySelectorAll(".chart-scroll").forEach(el => { el.scrollLeft = el.scrollWidth; });
     } catch (e) {
       console.error("Analytics error:", e);

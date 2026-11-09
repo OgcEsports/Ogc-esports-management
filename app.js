@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b15";
+  const APP_BUILD = "b17";
 
   function resetSavedLogin() {
     try {
@@ -1183,6 +1183,371 @@ async function openDoubtBox(team) {
   function empty(message) {
     return `<div class="empty-state">${escapeHtml(message)}</div>`;
   }
+  // ---------- Automatic analytics (built from real attendance + submissions) ----------
+  const IST_TZ = "Asia/Kolkata";
+  const C_RED = "#ff2d4d", C_BLUE = "#4da3ff", C_GREEN = "#3ecf8e";
+
+  function istKey(d) {
+    return new Date(d).toLocaleDateString("en-CA", { timeZone: IST_TZ });
+  }
+
+  function lastDays(n) {
+    const base = new Date(istKey(new Date()) + "T12:00:00Z");
+    const keys = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(base);
+      d.setUTCDate(d.getUTCDate() - i);
+      keys.push(d.toISOString().slice(0, 10));
+    }
+    return keys;
+  }
+
+  function daysAgo(key) {
+    return Math.round(
+      (Date.parse(istKey(new Date()) + "T00:00:00Z") - Date.parse(key + "T00:00:00Z")) / 86400000
+    );
+  }
+
+  function shortDate(key) {
+    const p = key.split("-");
+    return Number(p[2]) + "/" + Number(p[1]);
+  }
+
+  // Supabase returns at most 1000 rows per request, so read in pages.
+  async function fetchAll(makeQuery) {
+    const rows = [];
+    for (let from = 0; from < 20000; from += 1000) {
+      const { data, error } = await makeQuery().range(from, from + 999);
+      if (error) throw error;
+      rows.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return rows;
+  }
+
+  function legend(items) {
+    return `<div class="tiny muted" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">${
+      items.map(i =>
+        `<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${i.color};margin-right:5px"></span>${escapeHtml(i.name)}</span>`
+      ).join("")}</div>`;
+  }
+
+  function barChart(labels, series, opts = {}) {
+    const H = 180, L = 32, R = 6, T = 10, B = 26;
+    const scroll = labels.length > 12;
+    const W = scroll ? L + R + labels.length * 26 : 320;
+    const plotW = W - L - R, plotH = H - T - B;
+    const peak = Math.max(1, ...series.flatMap(s => s.values));
+    const maxV = opts.max || Math.max(4, Math.ceil(peak / 4) * 4);
+    const unit = opts.unit || "";
+    const groupW = plotW / labels.length;
+    const barW = (groupW * 0.72) / series.length;
+    const step = scroll ? 1 : (labels.length > 8 ? 2 : 1);
+    let g = "";
+
+    [0, 0.5, 1].forEach(f => {
+      const y = T + plotH - f * plotH;
+      g += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="#2a2a33" stroke-width="1"/>` +
+           `<text x="${L - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9aa0a6">${Math.round(f * maxV)}${unit}</text>`;
+    });
+
+    labels.forEach((lab, i) => {
+      series.forEach((s, j) => {
+        const v = s.values[i] || 0;
+        const h = Math.max(0, Math.min(1, v / maxV)) * plotH;
+        const x = L + i * groupW + groupW * 0.14 + j * barW;
+        if (h > 0) {
+          g += `<rect x="${x.toFixed(1)}" y="${(T + plotH - h).toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${s.color}"/>`;
+        }
+      });
+      if ((labels.length - 1 - i) % step === 0) {
+        g += `<text x="${(L + i * groupW + groupW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(lab)}</text>`;
+      }
+    });
+
+    const svg = `<svg viewBox="0 0 ${W} ${H}" ${scroll ? `width="${W}" style="display:block"` : 'width="100%"'} role="img" aria-label="${escapeHtml(opts.label || "Chart")}">${g}</svg>`;
+    return scroll ? `<div class="chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">${svg}</div>` : svg;
+  }
+
+  function rankBars(items, unit = "") {
+    const max = Math.max(1, ...items.map(i => i.value));
+    return items.map(i => `
+      <div style="margin:10px 0">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:14px">
+          <span>${escapeHtml(i.label)}${i.sub ? ` <span class="tiny muted">· ${escapeHtml(i.sub)}</span>` : ""}</span>
+          <strong>${i.value}${unit}</strong>
+        </div>
+        <div style="height:6px;border-radius:4px;background:#23232b;margin-top:4px">
+          <div style="height:6px;border-radius:4px;width:${(i.value / max * 100).toFixed(0)}%;background:${C_RED}"></div>
+        </div>
+      </div>`).join("");
+  }
+
+  function aCard(title, body) {
+    return `<div class="content-card"><h3>${title}</h3>${body}</div>`;
+  }
+
+  const NO_DATA = "No activity yet. This fills in automatically as players mark attendance and upload drills and lobby OS.";
+  const RANGES = [7, 14, 30, 90];
+  let analyticsRange = 30;
+  let analyticsCache = null;
+
+  async function loadAnalyticsData(scope) {
+    if (analyticsCache && analyticsCache.scope === scope && Date.now() - analyticsCache.at < 60000) {
+      return analyticsCache.data;
+    }
+    const me = scope === "me";
+    const since = lastDays(90)[0];
+    const sinceTs = new Date(since + "T00:00:00+05:30").toISOString();
+
+    const [attRows, subRows] = await Promise.all([
+      fetchAll(() => {
+        let q = supabase.from("attendance_records")
+          .select("team_id,player_id,attendance_date,status")
+          .gte("attendance_date", since)
+          .order("attendance_date").order("player_id");
+        if (me) q = q.eq("player_id", currentUser.id);
+        return q;
+      }),
+      fetchAll(() => {
+        let q = supabase.from("team_submissions")
+          .select("team_id,user_id,kind,created_at")
+          .gte("created_at", sinceTs)
+          .order("created_at").order("user_id");
+        if (me) q = q.eq("user_id", currentUser.id);
+        return q;
+      })
+    ]);
+
+    const data = { attRows, subRows, teamRows: [], totalPlayers: 0, open: [] };
+
+    if (!me) {
+      const { data: teamRows } = await supabase.from("teams").select("id,name");
+      data.teamRows = teamRows || [];
+      try {
+        const { data: counts } = await supabase.rpc("get_team_player_counts");
+        data.totalPlayers = (counts || []).reduce((s, r) => s + Number(r.approved_count || 0), 0);
+      } catch (_) {}
+      try {
+        data.open = await fetchAll(() =>
+          supabase.from("doubt_submissions").select("id,team_id").eq("status", "open").order("id"));
+      } catch (_) { data.open = null; }
+    }
+
+    analyticsCache = { scope, at: Date.now(), data };
+    return data;
+  }
+
+  function rangeBar(active) {
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px" id="range-bar">
+      <span class="tiny muted" style="align-self:center">Show:</span>
+      ${RANGES.map(n => `<button type="button" data-range="${n}" class="secondary-btn small" style="${n === active ? "border-color:" + C_RED + ";color:" + C_RED + ";" : ""}">${n} days</button>`).join("")}
+    </div>`;
+  }
+
+  function dailyTable(rows, cols) {
+    return `<div style="overflow:auto;max-height:380px;border:1px solid #2a2a33;border-radius:10px">
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr>${cols.map(c => `<th style="text-align:left;padding:9px;position:sticky;top:0;background:#14141a">${c}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${r.map(c => `<td style="padding:9px;border-top:1px solid #2a2a33">${c}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>`;
+  }
+
+  async function buildAnalytics(scope) {
+    const me = scope === "me";
+    const range = analyticsRange;
+    const data = await loadAnalyticsData(scope);
+    let days = lastDays(range);
+
+    // For a player, do not show days from before the account existed.
+    if (me && currentProfile && currentProfile.created_at) {
+      const joined = istKey(currentProfile.created_at);
+      const kept = days.filter(d => d >= joined);
+      if (kept.length) days = kept;
+    }
+
+    const present = data.attRows.filter(r => String(r.status).toLowerCase() === "present");
+    const subs = data.subRows.map(r => ({ ...r, day: istKey(r.created_at) }));
+    const teamName = new Map(data.teamRows.map(t => [t.id, t.name]));
+
+    const drillsByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "DRILLS").length);
+    const osByDay = days.map(d => subs.filter(s => s.day === d && s.kind === "LOBBY OS").length);
+    const presentByDay = days.map(d => new Set(
+      present.filter(r => r.attendance_date === d).map(r => r.player_id)
+    ).size);
+    const labels = days.map(shortDate);
+
+    const perfEmpty = drillsByDay.every(v => v === 0) && osByDay.every(v => v === 0);
+    const perfChart = perfEmpty
+      ? empty(NO_DATA)
+      : legend([{ name: "Drills", color: C_RED }, { name: "Lobby OS", color: C_BLUE }]) +
+        barChart(labels, [{ values: drillsByDay, color: C_RED }, { values: osByDay, color: C_BLUE }],
+          { label: "Daily drill and lobby OS submissions" });
+
+    const inLast7 = k => daysAgo(k) >= 0 && daysAgo(k) < 7;
+
+    // ---------- Player view ----------
+    if (me) {
+      const presentDays = presentByDay.filter(v => v > 0).length;
+      const drillsN = drillsByDay.reduce((a, b) => a + b, 0);
+      const osN = osByDay.reduce((a, b) => a + b, 0);
+      const attPct = presentByDay.map(v => (v > 0 ? 100 : 0));
+
+      const weeks = [0, 1, 2, 3].map(w => {
+        const inWeek = k => { const a = daysAgo(k); return a >= (3 - w) * 7 && a < (4 - w) * 7; };
+        return subs.filter(s => inWeek(s.day)).length +
+               present.filter(r => inWeek(r.attendance_date)).length;
+      });
+      const weeksTotal = weeks.reduce((a, b) => a + b, 0);
+
+      const attBody = presentDays === 0 && data.attRows.length === 0
+        ? empty("Mark your attendance each day and it will appear here.")
+        : legend([{ name: "Present", color: C_GREEN }]) +
+          barChart(labels, [{ values: attPct, color: C_GREEN }],
+            { max: 100, unit: "%", label: "Your attendance" });
+
+      const rows = days.map((d, i) => [
+        escapeHtml(d.split("-").reverse().join("/")),
+        presentByDay[i] > 0 ? "Present" : (d === days[days.length - 1] ? "Not marked yet" : "Absent"),
+        String(drillsByDay[i]),
+        String(osByDay[i])
+      ]).reverse();
+
+      return `
+        <div class="section-head"><h2>YOUR STATS</h2><p>Updates automatically</p></div>
+        ${rangeBar(range)}
+        <div class="stats-grid">
+          ${stat("PRESENT", presentDays + "/" + days.length, "Days in range")}
+          ${stat("DRILLS", String(drillsN), "In range")}
+          ${stat("LOBBY OS", String(osN), "In range")}
+          ${stat("ATTENDANCE", Math.round(presentDays / Math.max(1, days.length) * 100) + "%", "In range")}
+        </div>
+        <div class="two-col" style="margin-top:14px">
+          ${aCard("Performance overview", perfChart)}
+          ${aCard("Attendance", attBody)}
+        </div>
+        <div style="margin-top:14px">${aCard("Your weekly activity",
+          weeksTotal === 0 ? empty(NO_DATA)
+            : barChart(["3 wks ago", "2 wks ago", "Last wk", "This wk"],
+                [{ values: weeks, color: C_RED }], { label: "Your weekly activity" }))}</div>
+        <div class="section-head"><h2>DAILY RECORD</h2><p>Every day, newest first</p></div>
+        ${dailyTable(rows, ["Date", "Attendance", "Drills", "Lobby OS"])}`;
+    }
+
+    // ---------- Owner / member view (whole organization) ----------
+    const totalPlayers = data.totalPlayers || Math.max(1, ...presentByDay);
+    const attPct = presentByDay.map(v => Math.min(100, Math.round(v / totalPlayers * 100)));
+    const attBody = presentByDay.every(v => v === 0)
+      ? empty(NO_DATA)
+      : legend([{ name: "Players present (% of all approved players)", color: C_GREEN }]) +
+        barChart(labels, [{ values: attPct, color: C_GREEN }],
+          { max: 100, unit: "%", label: "Daily attendance percentage" });
+
+    const teamScore = new Map();
+    subs.filter(s => inLast7(s.day)).forEach(s =>
+      teamScore.set(s.team_id, (teamScore.get(s.team_id) || 0) + 1));
+    present.filter(r => inLast7(r.attendance_date)).forEach(r =>
+      teamScore.set(r.team_id, (teamScore.get(r.team_id) || 0) + 1));
+    const teamRank = [...teamScore.entries()]
+      .map(([id, value]) => ({ label: teamName.get(id) || "Team", value }))
+      .sort((a, b) => b.value - a.value);
+    const weeklyBody = teamRank.length
+      ? `<p class="tiny muted">Drills + lobby OS + attendance, last 7 days</p>${rankBars(teamRank)}`
+      : empty(NO_DATA);
+
+    let reviewsBody;
+    if (data.open === null) {
+      reviewsBody = empty("Unanswered doubts could not be loaded.");
+    } else if (!data.open.length) {
+      reviewsBody = empty("No unanswered doubts. Everything is replied to.");
+    } else {
+      const byTeam = new Map();
+      data.open.forEach(d => byTeam.set(d.team_id, (byTeam.get(d.team_id) || 0) + 1));
+      const top = [...byTeam.entries()]
+        .map(([id, value]) => ({ label: teamName.get(id) || "Team", value }))
+        .sort((a, b) => b.value - a.value).slice(0, 5);
+      reviewsBody = `<p style="font-size:28px;margin:4px 0"><strong>${data.open.length}</strong> <span class="tiny muted">unanswered doubt${data.open.length === 1 ? "" : "s"}</span></p>${rankBars(top)}`;
+    }
+
+    // Top active players within the chosen range
+    const dayset = new Set(days);
+    const playerScore = new Map();
+    subs.filter(s => dayset.has(s.day)).forEach(s =>
+      playerScore.set(s.user_id, (playerScore.get(s.user_id) || 0) + 1));
+    present.filter(r => dayset.has(r.attendance_date)).forEach(r =>
+      playerScore.set(r.player_id, (playerScore.get(r.player_id) || 0) + 1));
+    const topIds = [...playerScore.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    let topBody = empty(NO_DATA);
+    if (topIds.length) {
+      const { data: people } = await supabase.from("profiles")
+        .select("id,full_name,ign,team_id").in("id", topIds.map(x => x[0]));
+      const pById = new Map((people || []).map(p => [p.id, p]));
+      topBody = `<p class="tiny muted">Attendance days + drill and lobby OS uploads, last ${days.length} days</p>` +
+        rankBars(topIds.map(([id, value]) => {
+          const p = pById.get(id);
+          return { label: p ? (p.ign || p.full_name) : "Player", sub: p ? (teamName.get(p.team_id) || "") : "", value };
+        }));
+    }
+
+    const subs7 = subs.filter(s => inLast7(s.day)).length;
+    const presentToday = presentByDay[presentByDay.length - 1];
+    const active7 = new Set([
+      ...subs.filter(s => inLast7(s.day)).map(s => s.user_id),
+      ...present.filter(r => inLast7(r.attendance_date)).map(r => r.player_id)
+    ]).size;
+
+    const rows = days.map((d, i) => [
+      escapeHtml(d.split("-").reverse().join("/")),
+      presentByDay[i] + " / " + totalPlayers + " (" + attPct[i] + "%)",
+      String(drillsByDay[i]),
+      String(osByDay[i])
+    ]).reverse();
+
+    return `
+      <div class="section-head"><h2>ORGANIZATION ANALYTICS</h2><p>Updates automatically</p></div>
+      ${rangeBar(range)}
+      <div class="stats-grid">
+        ${stat("PRESENT TODAY", String(presentToday), "of " + totalPlayers + " approved players")}
+        ${stat("SUBMISSIONS", String(subs7), "Drills + lobby OS, 7 days")}
+        ${stat("ACTIVE PLAYERS", String(active7), "Last 7 days")}
+        ${stat("TEAMS ACTIVE", String(teamRank.length), "With activity, 7 days")}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Daily performance", perfChart)}
+        ${aCard("Attendance analysis", attBody)}
+      </div>
+      <div class="two-col" style="margin-top:14px">
+        ${aCard("Weekly team activity", weeklyBody)}
+        ${aCard("Pending reviews", reviewsBody)}
+      </div>
+      <div class="section-head"><h2>TOP ACTIVE PLAYERS</h2></div>
+      <div class="content-card">${topBody}</div>
+      <div class="section-head"><h2>DAILY RECORD</h2><p>Every day, newest first</p></div>
+      ${dailyTable(rows, ["Date", "Players present", "Drills", "Lobby OS"])}`;
+  }
+
+  async function fillAnalytics(scope) {
+    const slot = $("analytics-slot");
+    if (!slot) return;
+    if (!analyticsCache || analyticsCache.scope !== scope) {
+      slot.innerHTML = empty("Loading analytics...");
+    }
+    try {
+      slot.innerHTML = await buildAnalytics(scope);
+      slot.querySelectorAll("[data-range]").forEach(b => {
+        b.onclick = () => {
+          analyticsRange = Number(b.dataset.range);
+          fillAnalytics(scope);
+        };
+      });
+      // Show the most recent days first on the scrollable charts
+      slot.querySelectorAll(".chart-scroll").forEach(el => { el.scrollLeft = el.scrollWidth; });
+    } catch (e) {
+      console.error("Analytics error:", e);
+      slot.innerHTML = empty("Could not load analytics: " + (e && e.message ? e.message : e));
+    }
+  }
+
   async function renderDashboard() {
     showView("dashboard-view");
 
@@ -1244,23 +1609,9 @@ async function openDoubtBox(team) {
            ${moduleCards(team.id)}`
         : empty("Your team has not been assigned yet. Please contact the website owner.")}
 
-      <div class="section-head"><h2>TEAM STATS</h2></div>
+      <div id="analytics-slot"></div>`;
 
-      <div class="two-col">
-        <div class="content-card">
-          <h3>Performance overview</h3>
-          <div class="chart-placeholder">
-            Team performance charts will appear here once the owner adds daily performance records.
-          </div>
-        </div>
-
-        <div class="content-card">
-          <h3>Attendance</h3>
-          <div class="chart-placeholder">
-            Your attendance graph will appear here when attendance records are added.
-          </div>
-        </div>
-      </div>`;
+    fillAnalytics("me");
   }
 
   async function renderMemberDashboard() {
@@ -1312,43 +1663,9 @@ async function openDoubtBox(team) {
 
       <div id="member-team-detail"></div>
 
-      <div class="section-head">
-        <h2>ORGANIZATION ANALYTICS</h2>
-        <p>Owner-maintained reporting</p>
-      </div>
+      <div id="analytics-slot"></div>`;
 
-      <div class="two-col">
-        <div class="content-card">
-          <h3>Daily performance</h3>
-          <div class="chart-placeholder">
-            Performance graph will populate after the owner records daily team metrics.
-          </div>
-        </div>
-
-        <div class="content-card">
-          <h3>Attendance analysis</h3>
-          <div class="chart-placeholder">
-            Attendance graph will populate after the owner records attendance.
-          </div>
-        </div>
-      </div>
-
-      <div class="two-col" style="margin-top:14px">
-        <div class="content-card">
-          <h3>Weekly team activity</h3>
-          ${empty("Weekly activity will appear after activity records are entered.")}
-        </div>
-
-        <div class="content-card">
-          <h3>Pending reviews</h3>
-          ${empty("No review data has been added yet.")}
-        </div>
-      </div>
-
-      <div class="section-head"><h2>TOP ACTIVE PLAYERS</h2></div>
-      <div class="content-card">
-        ${empty("Activity rankings will appear when the owner records player activity.")}
-      </div>`;
+    fillAnalytics("org");
 
     document.querySelectorAll("[data-team-open]").forEach(btn =>
       btn.addEventListener("click", () => {
@@ -1446,10 +1763,9 @@ async function openDoubtBox(team) {
 
       <div id="owner-team-detail"></div>
 
-      <p class="tiny muted">
-        This starter version supports secure account approval. Attendance, drill records,
-        performance charts and review workflows are the next build stage.
-      </p>`;
+      <div id="analytics-slot"></div>`;
+
+    fillAnalytics("org");
 
     document.querySelectorAll("[data-approve]").forEach(b =>
       b.addEventListener("click", () => approveProfile(b.dataset.approve))

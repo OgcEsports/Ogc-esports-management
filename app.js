@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b18";
+  const APP_BUILD = "b19";
 
   function resetSavedLogin() {
     try {
@@ -1248,12 +1248,12 @@ async function openDoubtBox(team) {
       ).join("")}</div>`;
   }
 
-  function geom(n) {
-    const H = 180, L = 32, R = 8, T = 10, B = 26;
+  function geom(n, rotate) {
+    const H = rotate ? 214 : 180, L = 32, R = 8, T = 10, B = rotate ? 60 : 26;
     const scroll = n > 12;
     const W = scroll ? L + R + n * 26 : 320;
     const plotW = W - L - R, plotH = H - T - B;
-    return { H, L, R, T, B, W, scroll, plotW, plotH, groupW: plotW / n };
+    return { H, L, R, T, B, W, scroll, rotate: !!rotate, plotW, plotH, groupW: plotW / n };
   }
 
   function axes(gm, maxV, unit, labels) {
@@ -1263,10 +1263,15 @@ async function openDoubtBox(team) {
       g += `<line x1="${gm.L}" x2="${gm.W - gm.R}" y1="${y}" y2="${y}" stroke="${C_GRID}" stroke-width="1"/>` +
            `<text x="${gm.L - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#9aa0a6">${Math.round(f * maxV)}${unit}</text>`;
     });
-    const step = gm.scroll ? 1 : (labels.length > 8 ? 2 : 1);
+    const step = gm.scroll || gm.rotate ? 1 : (labels.length > 8 ? 2 : 1);
     labels.forEach((lab, i) => {
-      if ((labels.length - 1 - i) % step === 0) {
-        g += `<text x="${(gm.L + i * gm.groupW + gm.groupW / 2).toFixed(1)}" y="${gm.H - 8}" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(lab)}</text>`;
+      if ((labels.length - 1 - i) % step !== 0) return;
+      const x = gm.L + i * gm.groupW + gm.groupW / 2;
+      if (gm.rotate) {
+        const y = gm.T + gm.plotH + 12;
+        g += `<text x="${x.toFixed(1)}" y="${y}" text-anchor="end" font-size="9" fill="#9aa0a6" transform="rotate(-40 ${x.toFixed(1)} ${y})">${escapeHtml(lab)}</text>`;
+      } else {
+        g += `<text x="${x.toFixed(1)}" y="${gm.H - 8}" text-anchor="middle" font-size="9" fill="#9aa0a6">${escapeHtml(lab)}</text>`;
       }
     });
     return g;
@@ -1281,7 +1286,7 @@ async function openDoubtBox(team) {
 
   // Bars: grouped by default, stacked with opts.stack
   function barChart(labels, series, opts = {}) {
-    const gm = geom(labels.length);
+    const gm = geom(labels.length, opts.rotate);
     const stack = !!opts.stack;
     const peak = stack
       ? Math.max(1, ...labels.map((_, i) => series.reduce((s, x) => s + (x.values[i] || 0), 0)))
@@ -1372,6 +1377,38 @@ async function openDoubtBox(team) {
     }).join("");
     return legend([{ name: "Present", color: C_GREEN }, { name: "Absent", color: C_OFF }]) +
       `<div class="chart-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch">${head}${rows}</div>`;
+  }
+
+  // Small charts for the per-team cards
+  function spark(values, color, maxV) {
+    const W = 160, H = 46, P = 3, n = values.length;
+    const mx = maxV || Math.max(1, ...values);
+    const pts = values.map((v, i) => [
+      P + (n > 1 ? i * (W - 2 * P) / (n - 1) : (W - 2 * P) / 2),
+      H - P - Math.max(0, Math.min(1, v / mx)) * (H - 2 * P)
+    ]);
+    const line = pts.map((q, i) => (i ? "L" : "M") + q[0].toFixed(1) + " " + q[1].toFixed(1)).join(" ");
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Trend">
+      <line x1="0" x2="${W}" y1="${H - P}" y2="${H - P}" stroke="${C_GRID}" stroke-width="1"/>
+      <path d="${line} L${pts[pts.length - 1][0].toFixed(1)} ${H - P} L${pts[0][0].toFixed(1)} ${H - P} Z" fill="${color}" opacity="0.18"/>
+      <path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+  }
+
+  function miniBars(a, b) {
+    const W = 160, H = 46, P = 3, n = a.length;
+    const peak = Math.max(1, ...a.map((v, i) => v + b[i]));
+    const slot = (W - 2 * P) / n;
+    let g = `<line x1="0" x2="${W}" y1="${H - P}" y2="${H - P}" stroke="${C_GRID}" stroke-width="1"/>`;
+    a.forEach((v, i) => {
+      let base = H - P;
+      [[v, C_RED], [b[i], C_BLUE]].forEach(([val, col]) => {
+        const h = val / peak * (H - 2 * P);
+        if (h <= 0) return;
+        base -= h;
+        g += `<rect x="${(P + i * slot + slot * 0.12).toFixed(1)}" y="${base.toFixed(1)}" width="${Math.max(1, slot * 0.76).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+      });
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Submissions">${g}</svg>`;
   }
 
   function rankBars(items, unit = "") {
@@ -1592,23 +1629,43 @@ async function openDoubtBox(team) {
       String(m.os)
     ]);
 
+    const shortNames = metrics.map(x => String(x.t.name).replace(/^OGC\s+/i, ""));
+    const anyUploads = metrics.some(x => x.m.drills + x.m.os > 0);
+    const anyAtt = metrics.some(x => x.m.attRange > 0);
+
+    const cards = metrics.map(({ t, m }) => `
+      <article class="content-card" style="margin:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <h3 style="margin:0">${escapeHtml(t.name)}</h3>
+          <button type="button" data-team-pick="${t.id}" class="text-btn">Open →</button>
+        </div>
+        <p class="tiny muted" style="margin:6px 0 10px">${m.n} players · ${m.attRange}% attendance · Drills ${m.drills} · Lobby OS ${m.os}</p>
+        <div class="tiny muted">Attendance trend</div>
+        ${m.presentDays ? spark(m.pct, C_GREEN, 100) : `<p class="tiny muted" style="margin:8px 0">No attendance yet</p>`}
+        <div class="tiny muted" style="margin-top:8px">Drills + lobby OS per day</div>
+        ${(m.drills + m.os) ? miniBars(m.drillsByDay, m.osByDay) : `<p class="tiny muted" style="margin:8px 0">No uploads yet</p>`}
+      </article>`).join("");
+
     return `
       <div class="stats-grid">
         ${stat("TEAMS", String(teams.length), "In the organization")}
         ${stat("APPROVED PLAYERS", String(totalPlayers), "Across all teams")}
         ${stat("TEAMS ACTIVE", String(activeTeams), "With activity, last " + days.length + " days")}
       </div>
-      <p class="tiny muted" style="margin:12px 0 0">Each team is shown on its own below. Pick a team above, or tap a name in the table, to see its full records.</p>
       <div class="two-col" style="margin-top:14px">
-        ${aCard("Activity by team", byScore.some(x => x.m.score > 0)
-          ? `<p class="tiny muted">Drills + lobby OS + attendance, last ${days.length} days</p>` +
-            rankBars(byScore.map(x => ({ label: x.t.name, sub: x.m.n + " players", value: x.m.score })))
+        ${aCard("Uploads by team", anyUploads
+          ? legend([{ name: "Drills", color: C_RED }, { name: "Lobby OS", color: C_BLUE }]) +
+            barChart(shortNames, [{ values: metrics.map(x => x.m.drills), color: C_RED }, { values: metrics.map(x => x.m.os), color: C_BLUE }],
+              { stack: true, rotate: true, label: "Drills and lobby OS uploads by team" })
           : empty(NO_DATA))}
-        ${aCard("Attendance by team", byAtt.some(x => x.m.attRange > 0)
+        ${aCard("Attendance by team", anyAtt
           ? `<p class="tiny muted">Average share of players present, last ${days.length} days</p>` +
-            rankBars(byAtt.map(x => ({ label: x.t.name, value: x.m.attRange })), "%")
+            barChart(shortNames, [{ values: metrics.map(x => x.m.attRange), color: C_GREEN }],
+              { max: 100, unit: "%", rotate: true, label: "Attendance percentage by team" })
           : empty(NO_DATA))}
       </div>
+      <div class="section-head"><h2>EACH TEAM</h2><p>Own graphs for every team · tap Open for full records</p></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">${cards}</div>
       <div style="margin-top:14px">${aCard("Pending reviews", doubtBody)}</div>
       <div class="section-head"><h2>TEAM COMPARISON</h2><p>One row per team</p></div>
       ${dailyTable(rows, ["Team", "Players", "Present today", "Attendance", "Drills", "Lobby OS"])}`;

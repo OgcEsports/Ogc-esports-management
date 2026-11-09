@@ -43,7 +43,7 @@
     if (sp) sp.classList.add("hidden");
   }
 
-  const APP_BUILD = "b19";
+  const APP_BUILD = "b20";
 
   function resetSavedLogin() {
     try {
@@ -1411,6 +1411,27 @@ async function openDoubtBox(team) {
     return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Submissions">${g}</svg>`;
   }
 
+  // Compact ring (donut) for the team cards
+  function ring(parts, centerText, centerSub) {
+    const total = parts.reduce((x, q) => x + q.value, 0);
+    const R = 36, C = 2 * Math.PI * R;
+    let acc = 0;
+    const arcs = total
+      ? parts.filter(q => q.value > 0).map(q => {
+          const len = q.value / total * C;
+          const el = `<circle r="${R}" cx="50" cy="50" fill="none" stroke="${q.color}" stroke-width="12" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 50 50)"/>`;
+          acc += len;
+          return el;
+        }).join("")
+      : "";
+    return `<svg width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="${escapeHtml(centerSub || "Ring chart")}">
+      <circle r="${R}" cx="50" cy="50" fill="none" stroke="${C_OFF}" stroke-width="12"/>
+      ${arcs}
+      <text x="50" y="52" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">${escapeHtml(centerText)}</text>
+      <text x="50" y="65" text-anchor="middle" font-size="8" fill="#9aa0a6">${escapeHtml(centerSub || "")}</text>
+    </svg>`;
+  }
+
   function rankBars(items, unit = "") {
     const max = Math.max(1, ...items.map(i => i.value));
     return items.map(i => `
@@ -1633,18 +1654,32 @@ async function openDoubtBox(team) {
     const anyUploads = metrics.some(x => x.m.drills + x.m.os > 0);
     const anyAtt = metrics.some(x => x.m.attRange > 0);
 
-    const cards = metrics.map(({ t, m }) => `
+    const cards = metrics.map(({ t, m }) => {
+      const slots = m.n * days.length;
+      const absent = Math.max(0, slots - m.presentDays);
+      const attRing = ring(
+        [{ value: m.presentDays, color: C_GREEN }, { value: absent, color: C_OFF }],
+        slots ? m.attRange + "%" : "—", "attendance");
+      const upRing = ring(
+        [{ value: m.drills, color: C_RED }, { value: m.os, color: C_BLUE }],
+        String(m.drills + m.os), "uploads");
+      return `
       <article class="content-card" style="margin:0">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <h3 style="margin:0">${escapeHtml(t.name)}</h3>
           <button type="button" data-team-pick="${t.id}" class="text-btn">Open →</button>
         </div>
-        <p class="tiny muted" style="margin:6px 0 10px">${m.n} players · ${m.attRange}% attendance · Drills ${m.drills} · Lobby OS ${m.os}</p>
-        <div class="tiny muted">Attendance trend</div>
-        ${m.presentDays ? spark(m.pct, C_GREEN, 100) : `<p class="tiny muted" style="margin:8px 0">No attendance yet</p>`}
-        <div class="tiny muted" style="margin-top:8px">Drills + lobby OS per day</div>
-        ${(m.drills + m.os) ? miniBars(m.drillsByDay, m.osByDay) : `<p class="tiny muted" style="margin:8px 0">No uploads yet</p>`}
-      </article>`).join("");
+        <p class="tiny muted" style="margin:6px 0 10px">${m.n} players · present today ${m.presentByDay[last]}/${m.n}</p>
+        <div style="display:flex;gap:10px;justify-content:space-around;flex-wrap:wrap">
+          <div style="text-align:center">${attRing}
+            <div class="tiny muted"><span style="color:${C_GREEN}">●</span> Present · <span style="color:${C_OFF}">●</span> Absent</div>
+          </div>
+          <div style="text-align:center">${upRing}
+            <div class="tiny muted"><span style="color:${C_RED}">●</span> Drills ${m.drills} · <span style="color:${C_BLUE}">●</span> OS ${m.os}</div>
+          </div>
+        </div>
+      </article>`;
+    }).join("");
 
     return `
       <div class="stats-grid">
@@ -1664,7 +1699,7 @@ async function openDoubtBox(team) {
               { max: 100, unit: "%", rotate: true, label: "Attendance percentage by team" })
           : empty(NO_DATA))}
       </div>
-      <div class="section-head"><h2>EACH TEAM</h2><p>Own graphs for every team · tap Open for full records</p></div>
+      <div class="section-head"><h2>EACH TEAM</h2><p>Own rings for every team · tap Open for full records</p></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">${cards}</div>
       <div style="margin-top:14px">${aCard("Pending reviews", doubtBody)}</div>
       <div class="section-head"><h2>TEAM COMPARISON</h2><p>One row per team</p></div>
